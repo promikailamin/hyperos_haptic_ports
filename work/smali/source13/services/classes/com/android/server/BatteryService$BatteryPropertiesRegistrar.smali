@@ -1,0 +1,86 @@
+.class final Lcom/android/server/BatteryService$BatteryPropertiesRegistrar;
+.super Landroid/os/IBatteryPropertiesRegistrar$Stub;
+.source "BatteryService.java"
+
+
+# annotations
+.annotation system Ldalvik/annotation/EnclosingClass;
+    value = Lcom/android/server/BatteryService;
+.end annotation
+
+.annotation system Ldalvik/annotation/InnerClass;
+    accessFlags = 0x12
+    name = "BatteryPropertiesRegistrar"
+.end annotation
+
+
+# instance fields
+.field final synthetic this$0:Lcom/android/server/BatteryService;
+
+
+# direct methods
+.method private constructor <init>(Lcom/android/server/BatteryService;)V
+    .registers 2
+
+    .line 1260
+    iput-object p1, p0, Lcom/android/server/BatteryService$BatteryPropertiesRegistrar;->this$0:Lcom/android/server/BatteryService;
+
+    invoke-direct {p0}, Landroid/os/IBatteryPropertiesRegistrar$Stub;-><init>()V
+
+    return-void
+.end method
+
+.method synthetic constructor <init>(Lcom/android/server/BatteryService;Lcom/android/server/BatteryService$BatteryPropertiesRegistrar-IA;)V
+    .registers 3
+
+    invoke-direct {p0, p1}, Lcom/android/server/BatteryService$BatteryPropertiesRegistrar;-><init>(Lcom/android/server/BatteryService;)V
+
+    return-void
+.end method
+
+
+# virtual methods
+.method public getProperty(ILandroid/os/BatteryProperty;)I
+    .registers 4
+    .param p1, "id"    # I
+    .param p2, "prop"    # Landroid/os/BatteryProperty;
+    .annotation system Ldalvik/annotation/Throws;
+        value = {
+            Landroid/os/RemoteException;
+        }
+    .end annotation
+
+    .line 1263
+    iget-object v0, p0, Lcom/android/server/BatteryService$BatteryPropertiesRegistrar;->this$0:Lcom/android/server/BatteryService;
+
+    invoke-static {v0}, Lcom/android/server/BatteryService;->-$$Nest$fgetmHealthServiceWrapper(Lcom/android/server/BatteryService;)Lcom/android/server/health/HealthServiceWrapper;
+
+    move-result-object v0
+
+    invoke-virtual {v0, p1, p2}, Lcom/android/server/health/HealthServiceWrapper;->getProperty(ILandroid/os/BatteryProperty;)I
+
+    move-result v0
+
+    return v0
+.end method
+
+.method public scheduleUpdate()V
+    .registers 2
+    .annotation system Ldalvik/annotation/Throws;
+        value = {
+            Landroid/os/RemoteException;
+        }
+    .end annotation
+
+    .line 1267
+    iget-object v0, p0, Lcom/android/server/BatteryService$BatteryPropertiesRegistrar;->this$0:Lcom/android/server/BatteryService;
+
+    invoke-static {v0}, Lcom/android/server/BatteryService;->-$$Nest$fgetmHealthServiceWrapper(Lcom/android/server/BatteryService;)Lcom/android/server/health/HealthServiceWrapper;
+
+    move-result-object v0
+
+    invoke-virtual {v0}, Lcom/android/server/health/HealthServiceWrapper;->scheduleUpdate()V
+
+    .line 1268
+    return-void
+.end method

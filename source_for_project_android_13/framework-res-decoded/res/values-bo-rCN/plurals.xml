@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="pinpuk_attempts">
+        <item quantity="other">སྐུ་ཉིད་ཀྱིས་ད་དུང་ཐེངས་%dཙམ་ཚོད་ལྟ་བྱེད་ཆོག གལ་སྲིད་ད་རུང་མ་འགྲིག་ན། SIMཁཱ་སྒོ་ལྕགས་རྒྱག་ངེས་ཡིན།</item>
+    </plurals>
+</resources>

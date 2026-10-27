@@ -1,0 +1,42 @@
+.class public final synthetic Lcom/android/server/companion/virtual/VirtualDeviceManagerService$$ExternalSyntheticLambda3;
+.super Ljava/lang/Object;
+.source "R8$$SyntheticClass"
+
+# interfaces
+.implements Ljava/lang/Runnable;
+
+
+# instance fields
+.field public final synthetic f$0:Ljava/util/Set;
+
+.field public final synthetic f$1:Ljava/util/List;
+
+
+# direct methods
+.method public synthetic constructor <init>(Ljava/util/Set;Ljava/util/List;)V
+    .registers 3
+
+    .line 0
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
+    iput-object p1, p0, Lcom/android/server/companion/virtual/VirtualDeviceManagerService$$ExternalSyntheticLambda3;->f$0:Ljava/util/Set;
+
+    iput-object p2, p0, Lcom/android/server/companion/virtual/VirtualDeviceManagerService$$ExternalSyntheticLambda3;->f$1:Ljava/util/List;
+
+    return-void
+.end method
+
+
+# virtual methods
+.method public final run()V
+    .registers 2
+
+    .line 0
+    iget-object v0, p0, Lcom/android/server/companion/virtual/VirtualDeviceManagerService$$ExternalSyntheticLambda3;->f$0:Ljava/util/Set;
+
+    iget-object p0, p0, Lcom/android/server/companion/virtual/VirtualDeviceManagerService$$ExternalSyntheticLambda3;->f$1:Ljava/util/List;
+
+    invoke-static {v0, p0}, Lcom/android/server/companion/virtual/VirtualDeviceManagerService;->$r8$lambda$NyKvvyu73vZu5wAEGocwH5wi02c(Ljava/util/Set;Ljava/util/List;)V
+
+    return-void
+.end method

@@ -1,0 +1,40 @@
+.class Lcom/android/server/tare/EconomicPolicy$Cost;
+.super Ljava/lang/Object;
+.source "EconomicPolicy.java"
+
+
+# annotations
+.annotation system Ldalvik/annotation/EnclosingClass;
+    value = Lcom/android/server/tare/EconomicPolicy;
+.end annotation
+
+.annotation system Ldalvik/annotation/InnerClass;
+    accessFlags = 0x8
+    name = "Cost"
+.end annotation
+
+
+# instance fields
+.field public final costToProduce:J
+
+.field public final price:J
+
+
+# direct methods
+.method constructor <init>(JJ)V
+    .registers 5
+    .param p1, "costToProduce"    # J
+    .param p3, "price"    # J
+
+    .line 162
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
+    .line 163
+    iput-wide p1, p0, Lcom/android/server/tare/EconomicPolicy$Cost;->costToProduce:J
+
+    .line 164
+    iput-wide p3, p0, Lcom/android/server/tare/EconomicPolicy$Cost;->price:J
+
+    .line 165
+    return-void
+.end method

@@ -1,0 +1,65 @@
+.class Lcom/android/server/biometrics/sensors/face/hidl/Face10$4;
+.super Ljava/lang/Object;
+.source "Face10.java"
+
+# interfaces
+.implements Lcom/android/server/biometrics/sensors/ClientMonitorCallback;
+
+
+# annotations
+.annotation system Ldalvik/annotation/EnclosingMethod;
+    value = Lcom/android/server/biometrics/sensors/face/hidl/Face10;->lambda$scheduleEnroll$5$com-android-server-biometrics-sensors-face-hidl-Face10(ILandroid/os/IBinder;Landroid/hardware/face/IFaceServiceReceiver;[BLjava/lang/String;J[ILandroid/view/Surface;)V
+.end annotation
+
+.annotation system Ldalvik/annotation/InnerClass;
+    accessFlags = 0x0
+    name = null
+.end annotation
+
+
+# instance fields
+.field final synthetic this$0:Lcom/android/server/biometrics/sensors/face/hidl/Face10;
+
+.field final synthetic val$client:Lcom/android/server/biometrics/sensors/face/hidl/FaceEnrollClient;
+
+
+# direct methods
+.method constructor <init>(Lcom/android/server/biometrics/sensors/face/hidl/Face10;Lcom/android/server/biometrics/sensors/face/hidl/FaceEnrollClient;)V
+    .registers 3
+    .param p1, "this$0"    # Lcom/android/server/biometrics/sensors/face/hidl/Face10;
+
+    .line 660
+    iput-object p1, p0, Lcom/android/server/biometrics/sensors/face/hidl/Face10$4;->this$0:Lcom/android/server/biometrics/sensors/face/hidl/Face10;
+
+    iput-object p2, p0, Lcom/android/server/biometrics/sensors/face/hidl/Face10$4;->val$client:Lcom/android/server/biometrics/sensors/face/hidl/FaceEnrollClient;
+
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
+    return-void
+.end method
+
+
+# virtual methods
+.method public onClientFinished(Lcom/android/server/biometrics/sensors/BaseClientMonitor;Z)V
+    .registers 5
+    .param p1, "clientMonitor"    # Lcom/android/server/biometrics/sensors/BaseClientMonitor;
+    .param p2, "success"    # Z
+
+    .line 664
+    if-eqz p2, :cond_d
+
+    .line 666
+    iget-object v0, p0, Lcom/android/server/biometrics/sensors/face/hidl/Face10$4;->this$0:Lcom/android/server/biometrics/sensors/face/hidl/Face10;
+
+    iget-object v1, p0, Lcom/android/server/biometrics/sensors/face/hidl/Face10$4;->val$client:Lcom/android/server/biometrics/sensors/face/hidl/FaceEnrollClient;
+
+    invoke-virtual {v1}, Lcom/android/server/biometrics/sensors/face/hidl/FaceEnrollClient;->getTargetUserId()I
+
+    move-result v1
+
+    invoke-static {v0, v1}, Lcom/android/server/biometrics/sensors/face/hidl/Face10;->-$$Nest$mscheduleUpdateActiveUserWithoutHandler(Lcom/android/server/biometrics/sensors/face/hidl/Face10;I)V
+
+    .line 668
+    :cond_d
+    return-void
+.end method

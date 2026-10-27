@@ -1,0 +1,40 @@
+.class final Lcom/android/internal/widget/ViewGroupFader$GlobalVisibleViewBoundsProvider;
+.super Ljava/lang/Object;
+.source "ViewGroupFader.java"
+
+# interfaces
+.implements Lcom/android/internal/widget/ViewGroupFader$ChildViewBoundsProvider;
+
+
+# annotations
+.annotation system Ldalvik/annotation/EnclosingClass;
+    value = Lcom/android/internal/widget/ViewGroupFader;
+.end annotation
+
+.annotation system Ldalvik/annotation/InnerClass;
+    accessFlags = 0x18
+    name = "GlobalVisibleViewBoundsProvider"
+.end annotation
+
+
+# direct methods
+.method constructor blacklist <init>()V
+    .registers 1
+
+    .line 161
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
+    return-void
+.end method
+
+
+# virtual methods
+.method public blacklist provideBounds(Landroid/view/ViewGroup;Landroid/view/View;Landroid/graphics/Rect;)V
+    .registers 4
+
+    .line 168
+    invoke-virtual {p2, p3}, Landroid/view/View;->getGlobalVisibleRect(Landroid/graphics/Rect;)Z
+
+    .line 169
+    return-void
+.end method

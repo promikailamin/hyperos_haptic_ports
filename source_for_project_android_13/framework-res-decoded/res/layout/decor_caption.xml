@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.android.internal.widget.MiuiDecorCaptionView android:orientation="vertical" android:descendantFocusability="beforeDescendants" android:layout_width="match_parent" android:layout_height="match_parent"
+  xmlns:android="http://schemas.android.com/apk/res/android">
+    <com.android.internal.widget.OpenCloseTipView android:layout_width="match_parent" android:layout_height="match_parent" />
+    <FrameLayout android:id="@id/top_caption" android:background="@color/transparent" android:focusable="false" android:descendantFocusability="blocksDescendants" android:layout_width="match_parent" android:layout_height="28.359985dp" android:minHeight="10.0dp">
+        <View android:layout_gravity="center" android:id="@id/move_region" android:background="@color/transparent" android:layout_width="244.53998dp" android:layout_height="28.359985dp" android:minHeight="10.0dp" />
+    </FrameLayout>
+    <FrameLayout android:id="@id/bottom_caption" android:background="@color/transparent" android:focusable="false" android:descendantFocusability="blocksDescendants" android:layout_width="match_parent" android:layout_height="37.819977dp" />
+</com.android.internal.widget.MiuiDecorCaptionView>
