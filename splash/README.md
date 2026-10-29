@@ -14,10 +14,14 @@ the official fastboot ROM and `imagefv.img` in this repository).
 - ROM: `veux_global_images_OS1.0.12.0.TKCMIXM_20241205.0000.00_13.0_global_cda1240a45.tgz`
 - Source image: `images/imagefv.elf` from that ROM
 - Local copy: [`../images/imagefv.img`](../images/imagefv.img)
-- SHA-256: `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`
+- Current (repacked) SHA-256: `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65`
+- Stock ROM SHA-256: `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`
 
-The local `imagefv.img` is byte-for-byte identical to the official ROM's
-`imagefv.elf`, so the assets below are from the official firmware.
+The checked-in `imagefv.img` has been repacked with a custom
+`logo_m_unlock` (see below). All other assets are unchanged from the stock
+firmware. The original stock `imagefv.img` is still available from the
+[`xemu-veux-os1.0.10.0-images`](https://github.com/promikailamin/hyperos_haptic_ports/releases/tag/xemu-veux-os1.0.10.0-images)
+release.
 
 ## How the extraction was done
 
@@ -37,6 +41,27 @@ for src in Path("extracted_images").glob("*.bmp"):
 PY
 ```
 
+## Custom `logo_m_unlock` replacement
+
+[Issue #17](https://github.com/promikailamin/hyperos_haptic_ports/issues/17)
+supplied a replacement 300×2400 RGBA logo. Because the firmware stores these
+graphics as 24-bit BMPs without an alpha channel, the new PNG was flattened
+over black (the bootloader background) and saved using the original BMP header.
+That BMP replaced the raw section of the `logo_m_unlock.bmp` FFS file inside
+the inner firmware volume.
+
+The inner volume was then recompressed as a single LZMA stream, and the outer
+GUIDed section size, FFS file size and FFS header checksum were rebuilt. The FV
+header and all other embedded graphics were left untouched. Extracting the
+repacked image with `imagefv_extractor` yields all 17 BMPs, with only
+`logo_m_unlock.bmp` changed.
+
+- Replacement logo: [`logo_m_unlock.png`](logo_m_unlock.png) (300×2400,
+  flattened onto black for the embedded BMP)
+- Embedded BMP: `logo_m_unlock.bmp` (300×2400, 24-bit)
+- Final `imagefv.img` SHA-256:
+  `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65`
+
 ## Assets
 
 | PNG | Resolution | Size (bytes) |
@@ -50,7 +75,7 @@ PY
 | `battery_symbol_Soc10.png` | 545×237 | 476 |
 | `logo_destory.png` | 1080×2400 | 19,908 |
 | `logo_fastboot.png` | 1080×2400 | 16,256 |
-| `logo_m_unlock.png` | 300×2400 | 22,244 |
+| `logo_m_unlock.png` | 300×2400 | 16,619 |
 | `logo_mi.png` | 300×1400 | 19,445 |
 | `logo_p_unlock.png` | 300×2250 | 22,576 |
 | `logo_poco.png` | 300×1250 | 19,858 |

@@ -16,10 +16,20 @@ Source ROM: [xiaomi.eu_VEUX_OS1.0.10.0.TKCCNXM_13.zip](https://sourceforge.net/p
 
 On veux the splash logo, fastboot screen, bootloader-unlock warnings, charging
 symbols and thermal warnings are embedded in the `imagefv` UEFI firmware volume
-(the `images/imagefv.img` file here, identical to `imagefv.elf` in the official
-ROM). They have been extracted and converted to PNG in [`splash/`](splash/).
-See [`splash/README.md`](splash/README.md) for the full listing, extraction
-method and checksums.
+(the `images/imagefv.img` file here). They have been extracted and converted to
+PNG in [`splash/`](splash/). See [`splash/README.md`](splash/README.md) for the
+full listing, extraction method and checksums.
+
+`images/imagefv.img` has been repacked with a custom `logo_m_unlock` supplied
+in [issue #17](https://github.com/promikailamin/hyperos_haptic_ports/issues/17).
+The repacked file has SHA-256
+`ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65`; the original
+stock image (SHA-256
+`3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`) is still
+available in the `xemu-veux-os1.0.10.0-images` release. All other embedded
+graphics are unchanged. See the
+[custom logo section](splash/README.md#custom-logo_m_unlock-replacement) for
+details.
 
 ## Reassembling super.img
 
