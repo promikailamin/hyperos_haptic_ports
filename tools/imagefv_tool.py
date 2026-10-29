@@ -53,6 +53,12 @@ SECTION_TYPE_UI = 0x15
 SECTION_TYPE_RAW = 0x19
 SECTION_TYPE_FV = 0x17
 
+FFS_HEADER_SIZE = 24
+SECTION_HEADER_SIZE = 4
+LARGE_SECTION_HEADER_SIZE = 8
+FV_HEADER_MIN_SIZE = 0x48
+LZMA_HEADER_SIZE = 13
+
 
 class ImagefvError(Exception):
     """Raised when an image cannot be parsed or rebuilt safely."""
@@ -60,6 +66,97 @@ class ImagefvError(Exception):
 
 def align_up(value: int, alignment: int) -> int:
     return (value + alignment - 1) // alignment * alignment
+
+
+def changed_ranges(old: bytes, new: bytes) -> list[tuple[int, int]]:
+    """Return ``(start, end)`` byte ranges that differ between two buffers."""
+    ranges = []
+    start = None
+    for index, (left, right) in enumerate(zip(old, new)):
+        if left != right:
+            if start is None:
+                start = index
+        elif start is not None:
+            ranges.append((start, index))
+            start = None
+    if start is not None:
+        ranges.append((start, min(len(old), len(new))))
+    if len(old) != len(new):
+        ranges.append((min(len(old), len(new)), max(len(old), len(new))))
+    return ranges
+
+
+def read_uint24(data: bytes, offset: int) -> int:
+    return int.from_bytes(data[offset : offset + 3], "little")
+
+
+def reconstruct_inner_stream(
+    stream: bytes, fv_offset: int, fv_end: int, new_inner: bytes
+) -> bytes:
+    """Replace only the inner firmware volume, preserving all surrounding data."""
+    if fv_offset < 0 or fv_end < fv_offset or fv_end > len(stream):
+        raise ImagefvError("inner firmware volume boundaries are outside the stream")
+    return stream[:fv_offset] + new_inner + stream[fv_end:]
+
+
+def bmp_info(data: bytes, label: str = "BMP") -> dict:
+    """Validate a BMP resource and return its layout information.
+
+    Only uncompressed Windows BITMAPINFOHEADER (or newer) images are accepted.
+    Palette-based images are supported because several stock battery symbols are
+    4-bit; replacements still have to keep the original bit depth.
+    """
+    if len(data) < 54 or data[:2] != b"BM":
+        raise ImagefvError(f"{label} is not a BMP image")
+    file_size = struct.unpack_from("<I", data, 2)[0]
+    pixel_offset = struct.unpack_from("<I", data, 10)[0]
+    dib_size = struct.unpack_from("<I", data, 14)[0]
+    if dib_size < 40 or 14 + dib_size > len(data):
+        raise ImagefvError(f"{label} has an unsupported BMP header size {dib_size}")
+    width, height = struct.unpack_from("<ii", data, 18)
+    planes = struct.unpack_from("<H", data, 26)[0]
+    bit_count = struct.unpack_from("<H", data, 28)[0]
+    compression = struct.unpack_from("<I", data, 30)[0]
+    image_size = struct.unpack_from("<I", data, 34)[0]
+    if width <= 0 or height == 0:
+        raise ImagefvError(f"{label} has invalid dimensions {width}x{height}")
+    if planes != 1:
+        raise ImagefvError(f"{label} has an unsupported colour-plane count {planes}")
+    if bit_count not in (1, 4, 8, 24, 32):
+        raise ImagefvError(f"{label} uses unsupported bit depth {bit_count}")
+    if compression != 0:
+        raise ImagefvError(
+            f"{label} uses unsupported BMP compression mode {compression}; "
+            "only uncompressed BMPs are supported"
+        )
+    if pixel_offset < 14 + dib_size:
+        raise ImagefvError(f"{label} has an invalid pixel-data offset")
+    row_stride = ((width * bit_count + 31) // 32) * 4
+    pixel_size = row_stride * abs(height)
+    if pixel_offset + pixel_size > len(data):
+        raise ImagefvError(
+            f"{label} pixel data ({pixel_size} bytes at 0x{pixel_offset:x}) "
+            "extends past the end of the file"
+        )
+    if file_size not in (0, len(data)):
+        raise ImagefvError(
+            f"{label} declares a file size of {file_size} bytes but contains "
+            f"{len(data)} bytes"
+        )
+    return {
+        "file_size": file_size,
+        "pixel_offset": pixel_offset,
+        "dib_size": dib_size,
+        "width": width,
+        "height": height,
+        "planes": planes,
+        "bit_count": bit_count,
+        "compression": compression,
+        "image_size": image_size,
+        "row_stride": row_stride,
+        "pixel_size": pixel_size,
+        "trailing_size": len(data) - pixel_offset - pixel_size,
+    }
 
 
 def checksum8(data: bytes) -> int:
@@ -266,10 +363,24 @@ class ElfImage:
             self.e_shnum,
             self.e_shstrndx,
         ) = fields
+        expected_phentsize = 56 if self.is_64 else 32
+        if self.e_phnum == 0:
+            raise ImagefvError("ELF image has no program headers")
+        if self.e_phentsize != expected_phentsize:
+            raise ImagefvError(
+                f"unsupported ELF program-header entry size {self.e_phentsize}"
+            )
+        if self.e_phoff + self.e_phnum * self.e_phentsize > len(data):
+            raise ImagefvError("ELF program-header table extends past the image")
         self.phdrs = [
             ProgramHeader(data, self.e_phoff + i * self.e_phentsize, self.is_64)
             for i in range(self.e_phnum)
         ]
+        for index, phdr in enumerate(self.phdrs):
+            if phdr.offset > len(data) or phdr.offset + phdr.filesz > len(data):
+                raise ImagefvError(
+                    f"ELF program header {index} extends past the image"
+                )
         self.hash_phdr = next(
             (p for p in self.phdrs if p.os_type == HASH_SEGMENT_TYPE), None
         )
@@ -359,17 +470,17 @@ class HashSegment:
         if self.hash_table_end > len(self.segment):
             raise ImagefvError("hash table extends past the hash segment")
         self.entry_count = elf.e_phnum
-        if self.entry_count and self.hash_table_size % self.entry_count == 0:
-            self.entry_size = self.hash_table_size // self.entry_count
-        elif self.hash_table_size % 48 == 0:
-            self.entry_size = 48
-        elif self.hash_table_size % 32 == 0:
-            self.entry_size = 32
-        else:
-            raise ImagefvError("cannot determine hash table entry size")
+        if not self.hash_table_size or self.hash_table_size % self.entry_count:
+            raise ImagefvError(
+                "ambiguous Qualcomm hash table: its size is not a multiple of "
+                "the program-header count"
+            )
+        self.entry_size = self.hash_table_size // self.entry_count
         if self.entry_size not in (32, 48, 64):
             raise ImagefvError(f"unsupported hash entry size {self.entry_size}")
         self.hash_name = sha_for_entry_size(self.entry_size)
+        if self.hash_table_end + sum(self.signature_sizes) > len(self.segment):
+            raise ImagefvError("hash segment signatures extend past the segment")
 
     @property
     def hash_table(self) -> bytes:
@@ -435,33 +546,48 @@ class HashSegment:
 
 
 class Section:
-    def __init__(self, raw: bytes, offset: int):
+    def __init__(self, raw: bytes, offset: int, limit: int | None = None):
         self.raw = raw
         self.offset = offset
-        size = int.from_bytes(raw[offset : offset + 3], "little")
+        if limit is None:
+            limit = len(raw)
+        if offset + SECTION_HEADER_SIZE > limit:
+            raise ImagefvError(f"truncated section at 0x{offset:x}")
+        size = read_uint24(raw, offset)
         self.large = size == 0xFFFFFF
-        self.header_size = 8 if self.large else 4
+        self.header_size = LARGE_SECTION_HEADER_SIZE if self.large else SECTION_HEADER_SIZE
         if self.large:
+            if offset + LARGE_SECTION_HEADER_SIZE > limit:
+                raise ImagefvError(f"truncated large section at 0x{offset:x}")
             size = struct.unpack_from("<I", raw, offset + 4)[0]
         self.size = size
         self.type = raw[offset + 3]
-        if size < self.header_size or offset + size > len(raw):
-            raise ImagefvError(f"invalid section at 0x{offset:x}")
+        self.limit = limit
+        if size < self.header_size or offset + size > limit:
+            raise ImagefvError(
+                f"invalid section at 0x{offset:x} (size 0x{size:x}, "
+                f"container ends at 0x{limit:x})"
+            )
         self.preamble = b""
         self.data_offset = offset + self.header_size
+        self.guid = b""
         if self.type == SECTION_TYPE_GUID_DEFINED:
             if self.header_size + 20 > size:
-                raise ImagefvError(f"short GUID section at 0x{offset:x}")
+                raise ImagefvError(f"short GUID-defined section at 0x{offset:x}")
             data_offset = struct.unpack_from("<H", raw, offset + self.header_size + 16)[0]
-            if data_offset < self.header_size or data_offset > size:
-                raise ImagefvError(f"invalid GUID section data offset at 0x{offset:x}")
+            if data_offset < self.header_size + 20 or data_offset > size:
+                raise ImagefvError(
+                    f"invalid GUID-defined section data offset at 0x{offset:x}"
+                )
             self.preamble = raw[
                 offset + self.header_size : offset + data_offset
             ]
             self.data_offset = offset + data_offset
             self.guid = raw[offset + self.header_size : offset + self.header_size + 16]
-        else:
-            self.guid = b""
+
+    @property
+    def end(self) -> int:
+        return self.offset + self.size
 
     @property
     def data(self) -> bytes:
@@ -476,29 +602,62 @@ class Section:
             header = size.to_bytes(4, "little")[:3] + bytes([self.type])
         return header + payload
 
+    def validation_failures(self, container_end: int) -> list[str]:
+        failures = []
+        if self.offset + self.size > container_end:
+            failures.append(
+                f"section at 0x{self.offset:x} extends past its container "
+                f"(0x{container_end:x})"
+            )
+        if self.data_offset > self.end:
+            failures.append(f"section at 0x{self.offset:x} has an invalid data offset")
+        if self.type == SECTION_TYPE_GUID_DEFINED:
+            expected = self.header_size + len(self.preamble)
+            if self.data_offset != self.offset + expected:
+                failures.append(
+                    f"GUID-defined section at 0x{self.offset:x} has an "
+                    "inconsistent data offset"
+                )
+        return failures
+
 
 class FfsFile:
-    def __init__(self, raw: bytes, offset: int):
+    def __init__(self, raw: bytes, offset: int, limit: int | None = None):
         self.raw = raw
         self.offset = offset
-        header = raw[offset : offset + 24]
-        if len(header) < 24 or header[:16] == FFS_GUID_ZERO:
+        if limit is None:
+            limit = len(raw)
+        self.limit = limit
+        if offset + FFS_HEADER_SIZE > limit:
+            raise ImagefvError(f"truncated FFS file at 0x{offset:x}")
+        header = raw[offset : offset + FFS_HEADER_SIZE]
+        if header[:16] == FFS_GUID_ZERO:
             raise ImagefvError(f"invalid FFS file at 0x{offset:x}")
         self.guid = header[:16]
         self.checksum = struct.unpack_from("<H", header, 16)[0]
         self.type = header[18]
         self.attributes = header[19]
-        self.size = int.from_bytes(header[20:23], "little")
+        self.size = read_uint24(header, 20)
         self.state = header[23]
-        if self.size < 24 or offset + self.size > len(raw):
-            raise ImagefvError(f"invalid FFS file size at 0x{offset:x}")
+        if self.size < FFS_HEADER_SIZE or offset + self.size > limit:
+            raise ImagefvError(
+                f"invalid FFS file size at 0x{offset:x} (size 0x{self.size:x}, "
+                f"container ends at 0x{limit:x})"
+            )
         self.sections = []
-        position = offset + 24
+        position = offset + FFS_HEADER_SIZE
         end = offset + self.size
-        while position + 4 <= end:
-            section = Section(raw, position)
+        while position + SECTION_HEADER_SIZE <= end:
+            section = Section(raw, position, end)
+            if (section.offset - (offset + FFS_HEADER_SIZE)) % 4:
+                raise ImagefvError(
+                    f"section at 0x{section.offset:x} is not 4-byte aligned"
+                )
             self.sections.append(section)
-            position = align_up(position + section.size, 4)
+            next_position = align_up(section.end, 4)
+            if next_position <= position:
+                raise ImagefvError(f"section loop detected at 0x{position:x}")
+            position = next_position
         self.name = ""
         for section in self.sections:
             if section.type == SECTION_TYPE_UI:
@@ -507,6 +666,10 @@ class FfsFile:
                 except UnicodeDecodeError:
                     pass
                 break
+
+    @property
+    def end(self) -> int:
+        return self.offset + self.size
 
     @property
     def data(self) -> bytes:
@@ -520,7 +683,15 @@ class FfsFile:
             body += section.rebuilt(new_data)
             if index + 1 < len(self.sections):
                 body += b"\x00" * (align_up(len(body), 4) - len(body))
-        size = 24 + len(body)
+        if self.sections:
+            # Preserve any device-specific bytes that follow the final section
+            # instead of silently dropping them when the file is rebuilt.
+            body += self.raw[self.sections[-1].end : self.end]
+        elif self.size > FFS_HEADER_SIZE:
+            body += self.raw[self.offset + FFS_HEADER_SIZE : self.end]
+        size = FFS_HEADER_SIZE + len(body)
+        if size >= 0x1000000:
+            raise ImagefvError("rebuilt FFS file is too large")
         header_data = (
             self.guid
             + b"\x00\x00"
@@ -539,7 +710,7 @@ class FfsFile:
         return bytes(header) + bytes(body)
 
     def header_valid(self) -> bool:
-        header = bytearray(self.raw[self.offset : self.offset + 24])
+        header = bytearray(self.raw[self.offset : self.offset + FFS_HEADER_SIZE])
         stored = self.checksum
         low = stored & 0xFF
         high = stored >> 8
@@ -547,16 +718,32 @@ class FfsFile:
         if high == 0xAA:
             expected_high = 0xAA
         elif self.attributes & 0x40:
-            expected_high = checksum8(self.data[24:])
+            expected_high = checksum8(self.data[FFS_HEADER_SIZE:])
         else:
             expected_high = 0xAA
         return low == expected_low and high == expected_high
+
+    def validation_failures(self) -> list[str]:
+        failures = []
+        label = self.name or self.guid.hex()
+        if not self.header_valid():
+            failures.append(f"FFS file {label} header/data checksum is invalid")
+        for section in self.sections:
+            failures.extend(
+                f"FFS file {label}: {failure}"
+                for failure in section.validation_failures(self.end)
+            )
+        if self.sections and self.sections[0].offset != self.offset + FFS_HEADER_SIZE:
+            failures.append(f"FFS file {label} has a gap before its first section")
+        return failures
 
 
 class FirmwareVolume:
     def __init__(self, raw: bytes, offset: int = 0):
         self.raw = raw
         self.offset = offset
+        if offset < 0 or offset + FV_HEADER_MIN_SIZE > len(raw):
+            raise ImagefvError(f"truncated firmware volume at 0x{offset:x}")
         if raw[offset + 40 : offset + 44] != FV_SIGNATURE:
             raise ImagefvError(f"no firmware volume at 0x{offset:x}")
         self.length = struct.unpack_from("<Q", raw, offset + 32)[0]
@@ -568,8 +755,10 @@ class FirmwareVolume:
             _reserved,
             self.revision,
         ) = struct.unpack_from("<IHHHBB", raw, offset + 44)
-        if self.length < 0x48 or offset + self.length > len(raw):
+        if self.length < FV_HEADER_MIN_SIZE or offset + self.length > len(raw):
             raise ImagefvError(f"invalid firmware volume length at 0x{offset:x}")
+        if self.header_length < FV_HEADER_MIN_SIZE or self.header_length > self.length:
+            raise ImagefvError(f"invalid firmware volume header length at 0x{offset:x}")
         self.block_map_offset = offset + 0x38
         self.block_map = []
         position = self.block_map_offset
@@ -579,24 +768,57 @@ class FirmwareVolume:
                 break
             self.block_map.append((blocks, length))
             position += 8
+        if not self.block_map:
+            raise ImagefvError(f"firmware volume at 0x{offset:x} has no block map")
+        if sum(blocks * length for blocks, length in self.block_map) != self.length:
+            raise ImagefvError(
+                f"firmware volume at 0x{offset:x} block map does not match its "
+                "declared length"
+            )
         if self.ext_header_offset:
+            if self.ext_header_offset < self.header_length:
+                raise ImagefvError(
+                    f"firmware volume at 0x{offset:x} has an invalid extension "
+                    "header offset"
+                )
             ext = offset + self.ext_header_offset
             if ext + 20 > offset + self.length:
-                raise ImagefvError("invalid firmware volume extension header")
+                raise ImagefvError(
+                    f"firmware volume at 0x{offset:x} has a truncated extension header"
+                )
             ext_size = struct.unpack_from("<I", raw, ext + 16)[0]
+            if ext_size < 20 or self.ext_header_offset + ext_size > self.length:
+                raise ImagefvError(
+                    f"firmware volume at 0x{offset:x} has an invalid extension header size"
+                )
             self.files_start = align_up(ext + ext_size, 8)
         else:
             self.files_start = align_up(offset + self.header_length, 8)
+        if self.files_start > offset + self.length:
+            raise ImagefvError(
+                f"firmware volume at 0x{offset:x} has files outside its bounds"
+            )
         self.files = []
         position = self.files_start
         end = offset + self.length
-        while position + 24 <= end:
-            header = raw[position : position + 24]
-            if header == b"\xff" * 24 or header[:16] == FFS_GUID_ZERO:
+        while position + FFS_HEADER_SIZE <= end:
+            header = raw[position : position + FFS_HEADER_SIZE]
+            if header == b"\xff" * FFS_HEADER_SIZE or header[:16] == FFS_GUID_ZERO:
                 break
-            file = FfsFile(raw, position)
+            file = FfsFile(raw, position, end)
+            if (file.offset - self.files_start) % 8:
+                raise ImagefvError(
+                    f"FFS file at 0x{file.offset:x} is not 8-byte aligned"
+                )
             self.files.append(file)
-            position = align_up(file.offset + file.size, 8)
+            next_position = align_up(file.end, 8)
+            if next_position <= position:
+                raise ImagefvError(f"FFS file loop detected at 0x{position:x}")
+            position = next_position
+
+    @property
+    def end(self) -> int:
+        return self.offset + self.length
 
     def header_valid(self) -> bool:
         header = self.raw[self.offset : self.offset + self.header_length]
@@ -604,17 +826,38 @@ class FirmwareVolume:
         return checksum16(bytes(header)) == 0
 
     def rebuild_files(self, replacements: dict[str, dict[int, bytes]]) -> bytes:
-        """Return a new FV with individual FFS files' section data replaced."""
-        out = bytearray(self.raw[self.offset : self.offset + self.length])
-        files_start = self.files_start - self.offset
-        out[files_start:] = b"\xff" * (len(out) - files_start)
-        position = files_start
+        """Return a new FV with individual FFS files' section data replaced.
+
+        When every rebuilt file keeps its original size, the original volume
+        bytes are patched in place so that unrelated padding and free space are
+        preserved exactly.  A size change (for example a larger compressed
+        payload) falls back to rebuilding the file area.
+        """
+        rebuilt = []
+        size_changed = False
         for file in self.files:
             replacement = replacements.get(file.name)
             if replacement is not None:
                 file_data = file.rebuild(replacement)
             else:
                 file_data = file.data
+            rebuilt.append((file, file_data))
+            if len(file_data) != file.size:
+                size_changed = True
+
+        out = bytearray(self.raw[self.offset : self.offset + self.length])
+        if not size_changed:
+            for file, file_data in rebuilt:
+                if file_data == file.data:
+                    continue
+                relative = file.offset - self.offset
+                out[relative : relative + len(file_data)] = file_data
+            return bytes(out)
+
+        files_start = self.files_start - self.offset
+        out[files_start:] = b"\xff" * (len(out) - files_start)
+        position = files_start
+        for file, file_data in rebuilt:
             if position + len(file_data) > len(out):
                 raise ImagefvError(
                     "modified files do not fit in the firmware volume; "
@@ -625,6 +868,31 @@ class FirmwareVolume:
         if position > len(out):
             raise ImagefvError("modified files overrun the firmware volume")
         return bytes(out)
+
+    def validation_failures(self) -> list[str]:
+        failures = []
+        label = f"firmware volume at 0x{self.offset:x}"
+        if not self.header_valid():
+            failures.append(f"{label} header checksum is invalid")
+        if self.offset + self.length > len(self.raw):
+            failures.append(f"{label} extends past its container")
+        previous = None
+        for file in self.files:
+            if file.offset < self.files_start or file.end > self.end:
+                failures.append(
+                    f"{label}: FFS file {file.name or file.guid.hex()} is outside "
+                    "the volume"
+                )
+            if previous is not None and file.offset < align_up(previous.end, 8):
+                failures.append(
+                    f"{label}: FFS file {file.name or file.guid.hex()} overlaps "
+                    "the previous file"
+                )
+            failures.extend(
+                f"{label}: {failure}" for failure in file.validation_failures()
+            )
+            previous = file
+        return failures
 
 
 class SplashImage:
@@ -655,37 +923,66 @@ class SplashImage:
         if self.lzma_section is None:
             raise ImagefvError("no LZMA-compressed firmware volume found")
 
+        compressed = self.lzma_section.data
+        if len(compressed) < LZMA_HEADER_SIZE:
+            raise ImagefvError("LZMA section is too small to contain a stream header")
+        self.lzma_declared_size = struct.unpack_from("<Q", compressed, 5)[0]
         try:
-            self.inner_stream = lzma.decompress(
-                self.lzma_section.data, format=lzma.FORMAT_ALONE
-            )
+            decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE)
+            self.inner_stream = decompressor.decompress(compressed)
         except lzma.LZMAError as exc:
             raise ImagefvError(f"cannot decompress inner firmware volume: {exc}") from exc
+        if not decompressor.eof:
+            raise ImagefvError("LZMA stream is truncated")
+        if decompressor.unused_data:
+            raise ImagefvError(
+                f"LZMA section contains {len(decompressor.unused_data)} unexpected "
+                "trailing bytes after the stream"
+            )
+        if (
+            self.lzma_declared_size != 0xFFFFFFFFFFFFFFFF
+            and self.lzma_declared_size != len(self.inner_stream)
+        ):
+            raise ImagefvError(
+                "LZMA-Alone header declares "
+                f"{self.lzma_declared_size} uncompressed bytes but the stream "
+                f"decodes to {len(self.inner_stream)} bytes"
+            )
 
         # The decompressed stream is one or more UEFI sections; the splash FV
         # lives in an EFI_SECTION_FIRMWARE_VOLUME_IMAGE (type 0x17) section.
         position = 0
         self.inner_section_offset = None
-        while position + 4 <= len(self.inner_stream):
-            size = int.from_bytes(self.inner_stream[position : position + 3], "little")
+        while position + SECTION_HEADER_SIZE <= len(self.inner_stream):
+            size = read_uint24(self.inner_stream, position)
             section_type = self.inner_stream[position + 3]
-            header_size = 4
+            header_size = SECTION_HEADER_SIZE
             if size == 0xFFFFFF:
+                if position + LARGE_SECTION_HEADER_SIZE > len(self.inner_stream):
+                    raise ImagefvError("truncated large section in inner stream")
                 size = struct.unpack_from("<I", self.inner_stream, position + 4)[0]
-                header_size = 8
+                header_size = LARGE_SECTION_HEADER_SIZE
             if size < header_size or position + size > len(self.inner_stream):
-                break
+                raise ImagefvError(
+                    f"invalid section at 0x{position:x} in the inner stream"
+                )
             if section_type == SECTION_TYPE_FV:
                 self.inner_section_offset = position
                 self.inner_fv_offset = position + header_size
                 self.inner_section_size = size
                 self.inner_section_header_size = header_size
+                self.inner_section_end = position + size
                 break
             position = align_up(position + size, 4)
         if self.inner_section_offset is None:
             raise ImagefvError("inner stream does not contain a firmware volume")
 
         self.inner = FirmwareVolume(self.inner_stream, self.inner_fv_offset)
+        self.inner_fv_end = self.inner_fv_offset + self.inner.length
+        if self.inner_fv_end > self.inner_section_end:
+            raise ImagefvError(
+                "inner firmware volume extends past its enclosing UEFI section"
+            )
 
     def image_names(self) -> list[str]:
         return [file.name for file in self.inner.files if file.name]
@@ -736,8 +1033,7 @@ class SplashImage:
         if section is None:
             raise ImagefvError(f"{name} has no raw image section")
         original = section.data
-        if len(original) < 54 or original[:2] != b"BM":
-            raise ImagefvError(f"{name} is not a BMP image")
+        original_info = bmp_info(original, name)
         src = path.read_bytes()
         if src[:8] == b"\x89PNG\r\n\x1a\n":
             if not HAVE_PIL:
@@ -747,45 +1043,64 @@ class SplashImage:
             from io import BytesIO
 
             image = Image.open(BytesIO(src)).convert("RGBA")
-            # The firmware only stores 24-bit BMPs. Flatten transparency onto
-            # black explicitly instead of discarding the alpha channel, which
-            # would expose whatever colour happens to be stored under fully
-            # transparent pixels (often white).
+            # Flatten transparency onto black explicitly instead of discarding
+            # the alpha channel, which would expose whatever colour happens to
+            # be stored under fully transparent pixels (often white).
             background = Image.new("RGBA", image.size, (0, 0, 0, 255))
             background.alpha_composite(image)
             out = BytesIO()
             background.convert("RGB").save(out, "BMP")
             src = out.getvalue()
-        if src[:2] != b"BM":
-            raise ImagefvError(f"{path} is not a BMP or PNG image")
-        if len(src) != len(original):
+        src_info = bmp_info(src, str(path))
+        comparable = ("width", "height", "planes", "bit_count", "compression")
+        if any(original_info[key] != src_info[key] for key in comparable):
             raise ImagefvError(
-                f"{name}: replacement is {len(src)} bytes but the slot is "
-                f"{len(original)} bytes; use exactly the same dimensions "
-                f"(and 24-bit BMP) as the extracted image"
+                f"{name}: image must stay {original_info['width']}x"
+                f"{original_info['height']}, {original_info['bit_count']}-bit, "
+                f"uncompressed (got {src_info['width']}x{src_info['height']}, "
+                f"{src_info['bit_count']}-bit, compression="
+                f"{src_info['compression']})"
             )
-        # Keep the original BMP header and only replace the pixel data. This
-        # preserves any device-specific fields in the header.
-        header_size = struct.unpack_from("<I", original, 10)[0]
-        src_header_size = struct.unpack_from("<I", src, 10)[0]
-        if header_size > len(original) or src_header_size > len(src):
-            raise ImagefvError(f"{name}: invalid BMP pixel offset")
-        old_w, old_h, old_bpp, old_comp = struct.unpack_from("<iiHH", original, 18)
-        new_w, new_h, new_bpp, new_comp = struct.unpack_from("<iiHH", src, 18)
-        if (old_w, old_h, old_bpp, old_comp) != (
-            new_w,
-            new_h,
-            new_bpp,
-            new_comp,
-        ):
-            raise ImagefvError(
-                f"{name}: image must stay {old_w}x{old_h}, {old_bpp}-bit, "
-                f"uncompressed (got {new_w}x{new_h}, {new_bpp}-bit, "
-                f"compression={new_comp})"
-            )
-        if len(src[src_header_size:]) != len(original[header_size:]):
+        if original_info["pixel_size"] != src_info["pixel_size"]:
             raise ImagefvError(f"{name}: replacement pixel data is not the same size")
-        return original[:header_size] + src[src_header_size:]
+
+        # Keep the original BMP header, palette and any device-specific trailing
+        # bytes; replace only the exact pixel-data range.
+        src_start = src_info["pixel_offset"]
+        dst_start = original_info["pixel_offset"]
+        pixels = src[src_start : src_start + src_info["pixel_size"]]
+        return (
+            original[:dst_start]
+            + pixels
+            + original[dst_start + original_info["pixel_size"] :]
+        )
+
+    def reconstruct_stream(self, new_inner: bytes) -> bytes:
+        """Rebuild the decompressed stream, preserving everything outside the FV."""
+        if len(new_inner) != self.inner.length:
+            raise ImagefvError(
+                "in-place inner firmware volume resize is not supported; "
+                "replacement resources must keep their original size"
+            )
+        return reconstruct_inner_stream(
+            self.inner_stream, self.inner_fv_offset, self.inner_fv_end, new_inner
+        )
+
+    def _compress_stream(self, stream: bytes) -> bytes:
+        props = self.lzma_section.data[:5]
+        filters = lzma._decode_filter_properties(lzma.FILTER_LZMA1, props)
+        compressed = lzma.compress(
+            stream,
+            format=lzma.FORMAT_ALONE,
+            filters=[filters],
+        )
+        if len(compressed) < LZMA_HEADER_SIZE:
+            raise ImagefvError("compressor returned a truncated LZMA stream")
+        return (
+            compressed[:5]
+            + struct.pack("<Q", len(stream))
+            + compressed[LZMA_HEADER_SIZE:]
+        )
 
     def repack(self, replacements: dict[str, Path], update_hashes: bool = True) -> bytes:
         normalised = {
@@ -802,26 +1117,16 @@ class SplashImage:
                     break
 
         new_inner = self.inner.rebuild_files(replacement_by_file)
-        if new_inner == self.inner_stream[self.inner_fv_offset :]:
+        new_stream = self.reconstruct_stream(new_inner)
+        if new_stream == self.inner_stream:
             # Nothing actually changed: keep the original signed image intact.
             return self.data
 
-        # Refresh the LZMA header's uncompressed-size field as well as the
-        # stream itself. Match the original properties and dictionary size.
-        props = self.lzma_section.data[:5]
-        filters = lzma._decode_filter_properties(lzma.FILTER_LZMA1, props)
-        compressed = lzma.compress(
-            self.inner_stream[: self.inner_fv_offset] + new_inner,
-            format=lzma.FORMAT_ALONE,
-            filters=[filters],
-        )
-        compressed = (
-            compressed[:5]
-            + struct.pack("<Q", len(self.inner_stream))
-            + compressed[13:]
-        )
+        compressed = self._compress_stream(new_stream)
 
-        new_outer = bytearray(self.data[self.outer_offset : self.outer_offset + self.outer.length])
+        new_outer = bytearray(
+            self.data[self.outer_offset : self.outer_offset + self.outer.length]
+        )
         files_start = self.outer.files_start - self.outer_offset
         new_outer[files_start:] = b"\xff" * (len(new_outer) - files_start)
         position = files_start
@@ -858,17 +1163,88 @@ class SplashImage:
 
         return bytes(result)
 
+    def bmp_validation_failures(self) -> list[str]:
+        failures = []
+        for file in self.inner.files:
+            if not file.name.lower().endswith(".bmp"):
+                continue
+            section = next(
+                (s for s in file.sections if s.type == SECTION_TYPE_RAW), None
+            )
+            if section is None:
+                failures.append(f"BMP resource {file.name} has no raw data section")
+                continue
+            try:
+                bmp_info(section.data, file.name)
+            except ImagefvError as exc:
+                failures.append(str(exc))
+        return failures
+
+    def validation_failures(
+        self, check_hashes: bool = True, check_signature: bool = True
+    ) -> list[str]:
+        """Return structural/authentication problems, without guessing."""
+        failures = []
+
+        image_size = len(self.data)
+        if self.elf.e_phoff + self.elf.phdr_table_size > image_size:
+            failures.append("ELF program-header table extends past the image")
+        for index, phdr in enumerate(self.elf.phdrs):
+            if phdr.offset > image_size or phdr.offset + phdr.filesz > image_size:
+                failures.append(f"ELF program header {index} extends past the image")
+            if phdr.align not in (0, 1) and (phdr.align & (phdr.align - 1)):
+                failures.append(f"ELF program header {index} has an invalid alignment")
+        load = self.elf.load_phdr
+        if self.outer.offset < load.offset or self.outer.end > load.offset + load.filesz:
+            failures.append(
+                "outer firmware volume does not fit inside its ELF load segment"
+            )
+
+        failures.extend(self.outer.validation_failures())
+        failures.extend(self.inner.validation_failures())
+
+        if self.inner_fv_offset > self.inner_section_end:
+            failures.append("inner firmware volume starts past its UEFI section")
+        if self.inner_fv_end > self.inner_section_end:
+            failures.append("inner firmware volume extends past its UEFI section")
+        if self.inner_fv_offset % 8:
+            failures.append("inner firmware volume is not 8-byte aligned")
+        if self.inner_fv_end > len(self.inner_stream):
+            failures.append("inner firmware volume extends past the decompressed stream")
+        if (
+            self.lzma_declared_size != 0xFFFFFFFFFFFFFFFF
+            and self.lzma_declared_size != len(self.inner_stream)
+        ):
+            failures.append(
+                "LZMA-Alone header does not match the decompressed stream length"
+            )
+        if self.reconstruct_stream(self.inner.raw[self.inner.offset : self.inner.end]) != self.inner_stream:
+            failures.append("reconstructed inner stream differs from the original stream")
+
+        failures.extend(self.bmp_validation_failures())
+
+        if check_hashes and not self.hash.matches(self.data):
+            failures.append("Qualcomm hash table does not match the ELF segments")
+        oem_valid = self.hash.oem_signature_valid()
+        if check_signature and oem_valid is False:
+            failures.append(
+                "OEM signature is invalid (the signed data was modified)"
+            )
+        return failures
+
     def report(self) -> dict:
         raw_hashes = self.hash.expected_hashes(self.data)
+        signature, certificates = self.hash.oem_signature_and_certificates()
         return {
             "elf": {
                 "phnum": self.elf.e_phnum,
                 "hash_segment_version": self.hash.version,
                 "hash": self.hash.hash_name,
                 "signed": self.hash.is_signed(),
-                "oem_signature_present": self.hash.oem_signature_and_certificates()[0]
-                is not None,
+                "oem_signature_present": signature is not None,
                 "oem_signature_valid": self.hash.oem_signature_valid(),
+                "certificate_chain_present": certificates is not None,
+                "certificate_chain_trusted": None,
             },
             "outer_fv": {
                 "length": self.outer.length,
@@ -881,7 +1257,21 @@ class SplashImage:
                 "header_checksum_ok": self.inner.header_valid(),
                 "names": self.image_names(),
             },
+            "lzma": {
+                "declared_uncompressed_size": self.lzma_declared_size,
+                "uncompressed_size": len(self.inner_stream),
+                "inner_fv_offset": self.inner_fv_offset,
+                "inner_fv_end": self.inner_fv_end,
+                "trailing_stream_bytes": len(self.inner_stream) - self.inner_fv_end,
+            },
             "hash_table_matches_segments": self.hash.hash_table == raw_hashes,
+            "oem_signature_and_hash_table_valid": (
+                signature is not None
+                and self.hash.oem_signature_valid() is True
+                and self.hash.hash_table == raw_hashes
+            ),
+            "fully_authenticated": None,
+            "certificate_chain_trusted": None,
         }
 
 
@@ -907,6 +1297,11 @@ def cmd_info(args: argparse.Namespace) -> int:
             "rejected by the bootloader unless it is unlocked/verification is skipped.",
             file=sys.stderr,
         )
+    print(
+        "NOTE: the embedded certificate chain is not independently trusted; "
+        "a valid signature only proves the signed data matches that certificate.",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -917,8 +1312,28 @@ def cmd_extract(args: argparse.Namespace) -> int:
     return 0
 
 
+def _write_new_output(input_path: Path, output_path: Path, data: bytes) -> None:
+    """Write an output file, refusing to overwrite the input firmware image."""
+    if input_path.resolve() == output_path.resolve():
+        raise ImagefvError(
+            "refusing to overwrite the input image; choose a separate output path"
+        )
+    if output_path.exists() and output_path.samefile(input_path):
+        raise ImagefvError(
+            "refusing to overwrite the input image through a hard link; "
+            "choose a separate output path"
+        )
+    output_path.write_bytes(data)
+
+
 def cmd_repack(args: argparse.Namespace) -> int:
-    image = load_image(Path(args.image))
+    input_path = Path(args.image)
+    output_path = Path(args.output)
+    if input_path.resolve() == output_path.resolve():
+        raise ImagefvError(
+            "refusing to overwrite the input image; choose a separate output path"
+        )
+    image = load_image(input_path)
     replacements = {}
     for item in args.replace or []:
         if "=" not in item:
@@ -930,16 +1345,22 @@ def cmd_repack(args: argparse.Namespace) -> int:
             name += ".bmp"
         replacements[name] = Path(path)
     if not replacements:
-        Path(args.output).write_bytes(image.data)
+        _write_new_output(input_path, output_path, image.data)
         print("no replacements requested; copied input unchanged")
         return 0
     result = image.repack(replacements, update_hashes=not args.keep_hash_table)
 
     check = SplashImage(result)
-    if not check.hash.matches(result) and not args.keep_hash_table:
-        raise ImagefvError("internal error: rebuilt hash table does not validate")
+    structural = check.validation_failures(
+        check_hashes=not args.keep_hash_table, check_signature=False
+    )
+    if structural:
+        raise ImagefvError(
+            "refusing to write an unsafe image; validation failed:\n  - "
+            + "\n  - ".join(structural)
+        )
     if result == image.data:
-        Path(args.output).write_bytes(result)
+        _write_new_output(input_path, output_path, result)
         print(f"wrote {args.output} ({len(result)} bytes)")
         print("payload identical to input; original signature preserved")
         return 0
@@ -960,9 +1381,9 @@ def cmd_repack(args: argparse.Namespace) -> int:
             "skips imagefv verification."
         )
 
-    Path(args.output).write_bytes(result)
+    _write_new_output(input_path, output_path, result)
     print(f"wrote {args.output} ({len(result)} bytes)")
-    print("structure: OK")
+    print("structural validation: OK")
     print(
         "hash table: refreshed"
         if not args.keep_hash_table
@@ -970,6 +1391,9 @@ def cmd_repack(args: argparse.Namespace) -> int:
     )
     if new_valid:
         print("OEM signature: OK (preserved by leaving the hash table untouched)")
+        print(
+            "NOTE: the embedded certificate chain is not independently trusted."
+        )
         if args.keep_hash_table:
             print(
                 "WARNING: the segment hashes are stale. This build only works on a "
@@ -981,40 +1405,39 @@ def cmd_repack(args: argparse.Namespace) -> int:
             "WARNING: the OEM signature is invalid. Edited imagefv images are "
             "normally rejected by the bootloader; keep the stock image for recovery."
         )
+    print(
+        "WARNING: structural validity does not make this image safe to flash. "
+        "Some devices verify the OEM signature independently."
+    )
     return 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
     data = Path(args.image).read_bytes()
     image = SplashImage(data)
-    failures = []
-    if not image.hash.matches(data):
-        failures.append("Qualcomm hash table does not match the ELF segments")
-    if not image.outer.header_valid():
-        failures.append("outer firmware volume header checksum is invalid")
-    if not image.inner.header_valid():
-        failures.append("inner firmware volume header checksum is invalid")
-    for fv_name, fv in (("outer", image.outer), ("inner", image.inner)):
-        for file in fv.files:
-            if not file.header_valid():
-                failures.append(
-                    f"{fv_name} FFS file {file.name or file.guid.hex()} header checksum is invalid"
-                )
+    failures = image.validation_failures(check_hashes=True, check_signature=True)
     oem_valid = image.hash.oem_signature_valid()
-    if oem_valid is False:
-        failures.append(
-            "OEM signature is invalid (the image was modified after signing)"
-        )
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}")
+        print("Result: NOT SAFE TO FLASH (validation failed)")
         return 1
+    print("ELF structure: OK")
     print("UEFI structure: OK")
+    print("LZMA stream: OK")
+    print("BMP resources: OK")
     print("Qualcomm hash table: OK")
     if oem_valid is True:
-        print("OEM signature: OK (verified with the embedded certificate)")
+        print(
+            "OEM signature: OK against the embedded certificate "
+            "(certificate-chain trust not verified)"
+        )
     elif oem_valid is None:
         print("OEM signature: absent")
+    print(
+        "Result: structurally valid only. This is not proof that the bootloader "
+        "will accept the image."
+    )
     return 0
 
 

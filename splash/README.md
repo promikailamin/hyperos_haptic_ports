@@ -78,12 +78,14 @@ python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
 python3 tools/imagefv_tool.py verify imagefv_custom.img
 ```
 
-Replacement images must have exactly the same dimensions and be 24-bit,
-uncompressed BMP (PNG input is converted automatically when Pillow is
-installed; transparent pixels are flattened onto black). The tool refuses
-replacements that would not fit the original slot. `repack` also refuses to write
-a rehashed signed image unless `--allow-unsigned` is given, because the result no
-longer has a valid OEM signature.
+Replacement images must have exactly the same dimensions, bit depth and
+uncompressed BMP format as the slot (PNG input is converted to 24-bit BMP when
+Pillow is installed; transparent pixels are flattened onto black). The tool
+validates BMP headers, row stride and pixel-data bounds, preserves the original
+header/palette/trailing bytes, and refuses replacements that would not fit the
+original slot. `repack` also refuses to write a rehashed signed image unless
+`--allow-unsigned` is given, because the result no longer has a valid OEM
+signature.
 
 ## Custom `logo_m_unlock` replacement
 

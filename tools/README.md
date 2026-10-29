@@ -38,10 +38,13 @@ python3 tools/imagefv_tool.py verify imagefv_custom.img
 
 `--replace` can be repeated. Names are the extracted BMP names, for example
 `logo_mi.bmp`, `logo_fastboot.bmp`, `logo_m_unlock.bmp` or
-`battery_symbol_Soc10.bmp`. A replacement must keep the original dimensions and
-must be an uncompressed 24-bit BMP; PNG files are converted automatically when
-Pillow is installed. Transparent pixels are flattened onto black. The tool keeps
-the original BMP header and only replaces the pixel data.
+`battery_symbol_Soc10.bmp`. A replacement must keep the original dimensions,
+bit depth and compression mode; stock resources include 4-bit and 24-bit
+uncompressed BMPs. PNG files are converted to 24-bit BMP automatically when
+Pillow is installed (they can therefore only replace 24-bit resources).
+Transparent pixels are flattened onto black. The tool keeps the original BMP
+header, palette and device-specific trailing bytes, and replaces only the exact
+pixel-data range.
 
 `--preserve-oem-signature` (alias `--keep-hash-table`) edits the payload but
 leaves the Qualcomm hash table untouched. The OEM signature therefore remains
@@ -59,8 +62,8 @@ been invalidated.
 ## What gets rebuilt
 
 1. Raw BMP section inside the inner FFS file.
-2. FFS file size and header checksum.
-3. Inner firmware volume free space.
+2. FFS file size, data checksum and header checksum.
+3. Inner firmware volume free space (only when a file size changes).
 4. LZMA1 stream (original properties/dictionary size, explicit uncompressed
    size in the LZMA-Alone header).
 5. Outer GUIDed section size and FFS header checksum.
@@ -68,8 +71,37 @@ been invalidated.
 7. Qualcomm SHA-256/SHA-384 hash table entries for the ELF header and each
    program-header segment.
 
-If the replacement is byte-identical to the original, the input is copied
-unchanged so its original signature is preserved.
+The decompressed LZMA payload is reconstructed as:
+
+```python
+new_stream = (
+    inner_stream[:inner_fv_offset]
+    + new_inner
+    + inner_stream[inner_fv_offset + inner.length:]
+)
+```
+
+Only the exact inner firmware-volume range is replaced; any sections or padding
+before/after it are preserved. The LZMA-Alone header is updated to
+`len(new_stream)`, not the old stream length. If the replacement produces a
+byte-identical stream, the input is returned unchanged so its original signature
+is preserved.
+
+## Validation and safety
+
+`verify` checks the ELF/program-header bounds, firmware-volume and FFS header
+checksums, section/file container bounds, 4/8-byte alignment, the LZMA header and
+stream length, the complete inner-stream reconstruction, every BMP header/pixel
+layout, and the Qualcomm hash table. It exits non-zero for any structural failure
+or an invalid OEM signature. The OEM signature is reported separately from the
+hash table, and certificate-chain trust is never claimed: a valid signature only
+shows that the signed data matches the certificate embedded in the image.
+
+`repack` validates the rebuilt image before writing, refuses to overwrite the
+input path (including hard links), and refuses to write an edited signed image
+unless `--allow-unsigned` is supplied. Even when validation passes, the tool
+prints that structural validity is not proof that the bootloader will accept the
+image.
 
 ## Important limitation
 
@@ -97,3 +129,9 @@ are byte-identical to stock.
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+The suite covers the stock image, both checked-in custom builds, a full
+extract-all/BMP-replace/no-change round trip (byte-for-byte), identical-pixel
+replacement, trailing LZMA-stream preservation, modified-BMP dimension/format
+checks, LZMA header length, hash/OEM-signature separation, and output-safety
+refusals.

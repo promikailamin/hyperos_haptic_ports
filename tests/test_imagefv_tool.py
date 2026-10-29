@@ -60,6 +60,10 @@ class ImagefvToolTests(unittest.TestCase):
         self.assertTrue(self.image.inner.header_valid())
         self.assertTrue(self.image.hash.matches(self.data))
         self.assertTrue(self.image.hash.oem_signature_valid())
+        report = self.image.report()
+        self.assertTrue(report["oem_signature_and_hash_table_valid"])
+        self.assertIsNone(report["fully_authenticated"])
+        self.assertIsNone(report["certificate_chain_trusted"])
 
     def test_checked_in_image_has_new_logo_and_valid_oem_signature(self):
         self.assertNotEqual(self.checked_in_data, self.data)
@@ -170,6 +174,116 @@ class ImagefvToolTests(unittest.TestCase):
             self.assertEqual(imagefv_tool.main(args + ["--allow-unsigned"]), 0)
             self.assertTrue(output.exists())
             self.assertEqual(imagefv_tool.main(["verify", str(output)]), 1)
+
+    def test_full_no_change_roundtrip_is_byte_identical(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            extracted = Path(tmp) / "extracted"
+            self.image.extract(extracted)
+            names = self.image.image_names()
+            replacements = {name: extracted / name for name in names}
+            result = self.image.repack(replacements)
+        self.assertEqual(result, self.data)
+        self.assertEqual(imagefv_tool.changed_ranges(self.data, result), [])
+        check = imagefv_tool.SplashImage(result)
+        self.assertEqual(check.inner_stream, self.image.inner_stream)
+        self.assertEqual(check.validation_failures(), [])
+        self.assertEqual(imagefv_tool.main(["verify", str(self.stock_path)]), 0)
+
+    def test_identical_pixel_data_replacement_stays_structurally_valid(self):
+        logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")
+        raw = next(s for s in logo.sections if s.type == imagefv_tool.SECTION_TYPE_RAW)
+        original_info = imagefv_tool.bmp_info(raw.data, logo.name)
+        bmp = bytearray(raw.data)
+        # Change a non-pixel header field while keeping the pixel data identical.
+        struct.pack_into("<i", bmp, 38, 12345)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "logo_m_unlock.bmp"
+            path.write_bytes(bytes(bmp))
+            result = self.image.repack({"logo_m_unlock.bmp": path})
+        self.assertEqual(result, self.data)
+        check = imagefv_tool.SplashImage(result)
+        check_info = imagefv_tool.bmp_info(
+            next(
+                s
+                for f in check.inner.files
+                if f.name == "logo_m_unlock.bmp"
+                for s in f.sections
+                if s.type == imagefv_tool.SECTION_TYPE_RAW
+            ).data,
+            "logo_m_unlock.bmp",
+        )
+        for key in ("width", "height", "bit_count", "compression", "pixel_size"):
+            self.assertEqual(check_info[key], original_info[key])
+        self.assertEqual(check.bmp_validation_failures(), [])
+        self.assertEqual(check.validation_failures(), [])
+
+    def test_stream_reconstruction_preserves_trailing_bytes(self):
+        stream = b"PREFIX" + b"OLD-FV" + b"TRAILING-DATA"
+        result = imagefv_tool.reconstruct_inner_stream(stream, 6, 12, b"NEW-FV")
+        self.assertEqual(result, b"PREFIX" + b"NEW-FV" + b"TRAILING-DATA")
+        with self.assertRaises(imagefv_tool.ImagefvError):
+            imagefv_tool.reconstruct_inner_stream(stream, 6, len(stream) + 1, b"")
+
+    def test_lzma_header_records_new_stream_length(self):
+        stream = self.image.inner_stream + b"\x00\x00\x00\x00"
+        compressed = self.image._compress_stream(stream)
+        self.assertEqual(
+            struct.unpack_from("<Q", compressed, 5)[0], len(stream)
+        )
+        self.assertEqual(
+            imagefv_tool.lzma.decompress(compressed, format=imagefv_tool.lzma.FORMAT_ALONE),
+            stream,
+        )
+
+    def test_modified_bmp_keeps_dimensions_and_valid_lzma_stream(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._modified_logo(Path(tmp))
+            result = self.image.repack({"logo_m_unlock.bmp": path})
+        self.assertNotEqual(result, self.data)
+        check = imagefv_tool.SplashImage(result)
+        rebuilt_inner = check.inner.raw[check.inner.offset : check.inner.end]
+        self.assertEqual(check.reconstruct_stream(rebuilt_inner), check.inner_stream)
+        self.assertEqual(check.lzma_declared_size, len(check.inner_stream))
+        self.assertEqual(
+            check.inner_stream[: check.inner_fv_offset],
+            self.image.inner_stream[: self.image.inner_fv_offset],
+        )
+        self.assertEqual(
+            check.inner_stream[check.inner_fv_end :],
+            self.image.inner_stream[self.image.inner_fv_end :],
+        )
+        self.assertEqual(
+            check.validation_failures(check_signature=False),
+            [],
+        )
+        stock_info = imagefv_tool.bmp_info(
+            self._raw_images(self.image)["logo_m_unlock.bmp"], "stock logo"
+        )
+        new_info = imagefv_tool.bmp_info(
+            self._raw_images(check)["logo_m_unlock.bmp"], "new logo"
+        )
+        for key in ("width", "height", "bit_count", "compression", "pixel_size"):
+            self.assertEqual(new_info[key], stock_info[key])
+
+    def test_repack_refuses_to_overwrite_the_input_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp) / "imagefv_stock.img"
+            original.write_bytes(self.data)
+            before = original.read_bytes()
+            args = ["repack", str(original), "-o", str(original)]
+            self.assertEqual(imagefv_tool.main(args), 2)
+            self.assertEqual(original.read_bytes(), before)
+
+    def test_bmp_validation_rejects_unsupported_compression(self):
+        logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")
+        raw = next(s for s in logo.sections if s.type == imagefv_tool.SECTION_TYPE_RAW)
+        bmp = bytearray(raw.data)
+        struct.pack_into("<I", bmp, 30, 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "logo_m_unlock.bmp"
+            path.write_bytes(bytes(bmp))
+            with self.assertRaises(imagefv_tool.ImagefvError):
+                self.image._normalise_replacement("logo_m_unlock.bmp", path)
 
 
 if __name__ == "__main__":
