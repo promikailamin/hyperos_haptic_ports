@@ -12,6 +12,15 @@ Source ROM: [xiaomi.eu_VEUX_OS1.0.10.0.TKCCNXM_13.zip](https://sourceforge.net/p
 - The larger images — `boot.img` (128 MB), `core_nhlos.img` (132 MB), `modem.img` (192 MB), `vendor_boot.img` (96 MB) and the 14 `super.img.N` sparse chunks (~512 MB each) — are attached as release assets:
   https://github.com/promikailamin/hyperos_haptic_ports/releases/tag/xemu-veux-os1.0.10.0-images
 
+## Splash / fastboot assets
+
+On veux the splash logo, fastboot screen, bootloader-unlock warnings, charging
+symbols and thermal warnings are embedded in the `imagefv` UEFI firmware volume
+(the `images/imagefv.img` file here, identical to `imagefv.elf` in the official
+ROM). They have been extracted and converted to PNG in [`splash/`](splash/).
+See [`splash/README.md`](splash/README.md) for the full listing, extraction
+method and checksums.
+
 ## Reassembling super.img
 
 The dynamic `super.img` is distributed as 14 ordered sparse chunks. Concatenate them in order:
