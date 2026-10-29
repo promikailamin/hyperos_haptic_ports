@@ -16,6 +16,9 @@ SPEC.loader.exec_module(imagefv_tool)
 CUSTOM_LOGO_SHA256 = (
     "714d280878b83652810316d4b2a19628b34a42bb8fe29c24b3bf7d578db24876"
 )
+CUSTOM_REDMI_LOGO_SHA256 = (
+    "8047e412831ecbd109b6c86a2aeee0d9f61995f84c59939bde18e31c611c364d"
+)
 
 
 class ImagefvToolTests(unittest.TestCase):
@@ -30,6 +33,20 @@ class ImagefvToolTests(unittest.TestCase):
         cls.rehashed_path = ROOT / "images" / "imagefv_rehashed.img"
         cls.rehashed_data = cls.rehashed_path.read_bytes()
         cls.rehashed_image = imagefv_tool.SplashImage(cls.rehashed_data)
+        cls.redmi_path = ROOT / "images" / "imagefv_r_unlock.img"
+        cls.redmi_data = cls.redmi_path.read_bytes()
+        cls.redmi_image = imagefv_tool.SplashImage(cls.redmi_data)
+        cls.redmi_rehashed_path = ROOT / "images" / "imagefv_r_unlock_rehashed.img"
+        cls.redmi_rehashed_data = cls.redmi_rehashed_path.read_bytes()
+        cls.redmi_rehashed_image = imagefv_tool.SplashImage(cls.redmi_rehashed_data)
+        cls.combined_path = ROOT / "images" / "imagefv_mr_unlock.img"
+        cls.combined_data = cls.combined_path.read_bytes()
+        cls.combined_image = imagefv_tool.SplashImage(cls.combined_data)
+        cls.combined_rehashed_path = ROOT / "images" / "imagefv_mr_unlock_rehashed.img"
+        cls.combined_rehashed_data = cls.combined_rehashed_path.read_bytes()
+        cls.combined_rehashed_image = imagefv_tool.SplashImage(
+            cls.combined_rehashed_data
+        )
 
     def _modified_logo(self, tmp: Path) -> Path:
         logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")
@@ -94,6 +111,47 @@ class ImagefvToolTests(unittest.TestCase):
                     self.assertNotEqual(custom[name], stock[name])
                 else:
                     self.assertEqual(custom[name], stock[name], name)
+
+    def test_redmi_builds_only_change_logo_r_unlock(self):
+        stock = self._raw_images(self.image)
+        for custom_image in (self.redmi_image, self.redmi_rehashed_image):
+            custom = self._raw_images(custom_image)
+            self.assertEqual(set(custom), set(stock))
+            for name in stock:
+                if name == "logo_r_unlock.bmp":
+                    self.assertNotEqual(custom[name], stock[name])
+                    self.assertEqual(
+                        hashlib.sha256(custom[name]).hexdigest(),
+                        CUSTOM_REDMI_LOGO_SHA256,
+                    )
+                else:
+                    self.assertEqual(custom[name], stock[name], name)
+
+    def test_redmi_signature_preserving_and_rehashed_states(self):
+        self.assertFalse(self.redmi_image.hash.matches(self.redmi_data))
+        self.assertTrue(self.redmi_image.hash.oem_signature_valid())
+        self.assertTrue(
+            self.redmi_rehashed_image.hash.matches(self.redmi_rehashed_data)
+        )
+        self.assertFalse(self.redmi_rehashed_image.hash.oem_signature_valid())
+
+    def test_combined_builds_change_both_unlock_logos(self):
+        stock = self._raw_images(self.image)
+        for custom_image in (self.combined_image, self.combined_rehashed_image):
+            custom = self._raw_images(custom_image)
+            self.assertEqual(set(custom), set(stock))
+            self.assertEqual(
+                hashlib.sha256(custom["logo_m_unlock.bmp"]).hexdigest(),
+                CUSTOM_LOGO_SHA256,
+            )
+            self.assertEqual(
+                hashlib.sha256(custom["logo_r_unlock.bmp"]).hexdigest(),
+                CUSTOM_REDMI_LOGO_SHA256,
+            )
+            for name in stock:
+                if name in ("logo_m_unlock.bmp", "logo_r_unlock.bmp"):
+                    continue
+                self.assertEqual(custom[name], stock[name], name)
 
     def test_unchanged_repack_preserves_signed_image(self):
         logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")

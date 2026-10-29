@@ -3,9 +3,10 @@ Source: https://sourceforge.net/projects/xiaomi-eu-multilang-miui-roms/files/xia
 ZIP MD5: d151950ba961ab2999a9146b723f732c
 #
 # Note: imagefv_stock.img is the stock, OEM-signed recovery image.
-# imagefv.img is the issue #21 logo with the OEM signature preserved (hash table
-# left untouched); imagefv_rehashed.img has a rebuilt hash table but no valid
-# OEM signature. See MANIFEST.md and splash/README.md.
+# imagefv.img and imagefv_r_unlock.img patch the Mi/Redmi unlock logo with the
+# OEM signature preserved (hash table left untouched); the *_rehashed variants
+# have a rebuilt hash table but no valid OEM signature. imagefv_mr_unlock.img
+# patches both slots. See MANIFEST.md and splash/README.md.
 
 3d9f2052062bc04a40b1b61a62b673829ca9dc9e72597062f6b591b96210ebea  abl.img
 93a4a9e03fd567dfe0fe4525de4b5f8e9c1204be13fe3036d30472a3f9a000b8  bluetooth.img
@@ -20,6 +21,10 @@ ec118c26a16827f41e96379edde6dd425be3e11ed2ffd6ed1901f964e94edd29  dtbo.img
 ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65  imagefv.img
 189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718  imagefv_rehashed.img
 3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed  imagefv_stock.img
+c36ce21e1232bb5b17249d8ed72e56acf8f298fc728c83a069f82127b37bc892  imagefv_mr_unlock.img
+422d0620b1a4e0818d6a1b0bd111a7975b731203853909147292afd3e8f9d976  imagefv_mr_unlock_rehashed.img
+1debe8cf2c1c281f43649c2288b560142e82a02a965574bb7f3e68a8dee07086  imagefv_r_unlock.img
+e76fb0d0202b00c34bde1a7a10e7e3bcdd1c7fa2ec84555510b8758ddbb299a9  imagefv_r_unlock_rehashed.img
 5d6db8435522ed185a73b601400519963bff808dc3bf74cd88f6dc9723b82656  keymaster.img
 c2ccabfece9f8619d6529d1e5bec2916a79f0ab786579260fa7e484bc11a2c33  modem.img
 82f83f61367bce117736fb7208b2ccdd7d53ba189080a5c31625ccc6a1f290c1  qupfw.img

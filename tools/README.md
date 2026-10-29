@@ -118,11 +118,17 @@ Checked-in imagefv files:
 | File | SHA-256 | State |
 | --- | --- | --- |
 | `images/imagefv_stock.img` | `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed` | Stock OEM-signed recovery image. |
-| `images/imagefv.img` | `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65` | Issue #21 logo; OEM signature preserved, hash table stale (experimental). |
-| `images/imagefv_rehashed.img` | `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718` | Issue #21 logo; hash table rebuilt, OEM signature invalid. |
+| `images/imagefv_mr_unlock.img` | `c36ce21e1232bb5b17249d8ed72e56acf8f298fc728c83a069f82127b37bc892` | Issue #23 Mi+Redmi logo; OEM signature preserved, hash table stale (experimental). |
+| `images/imagefv_mr_unlock_rehashed.img` | `422d0620b1a4e0818d6a1b0bd111a7975b731203853909147292afd3e8f9d976` | Issue #23 Mi+Redmi logo; hash table rebuilt, OEM signature invalid. |
+| `images/imagefv_r_unlock.img` | `1debe8cf2c1c281f43649c2288b560142e82a02a965574bb7f3e68a8dee07086` | Issue #23 Redmi logo; OEM signature preserved, hash table stale (experimental). |
+| `images/imagefv_r_unlock_rehashed.img` | `e76fb0d0202b00c34bde1a7a10e7e3bcdd1c7fa2ec84555510b8758ddbb299a9` | Issue #23 Redmi logo; hash table rebuilt, OEM signature invalid. |
+| `images/imagefv.img` | `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65` | Issue #21 Mi logo; OEM signature preserved, hash table stale (experimental). |
+| `images/imagefv_rehashed.img` | `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718` | Issue #21 Mi logo; hash table rebuilt, OEM signature invalid. |
 
-Both custom builds change only `logo_m_unlock.bmp`; all other embedded graphics
-are byte-identical to stock.
+The issue #23 builds change `logo_r_unlock.bmp` (Redmi slot) and, for the
+`mr` builds, also `logo_m_unlock.bmp` (Mi slot); all other embedded graphics are
+byte-identical to stock. A Redmi-branded veux device renders `logo_r_unlock`, so
+the earlier Mi-only builds could not change its unlock warning.
 
 ## Tests
 

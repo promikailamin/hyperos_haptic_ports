@@ -8,7 +8,7 @@ Source ROM: [xiaomi.eu_VEUX_OS1.0.10.0.TKCCNXM_13.zip](https://sourceforge.net/p
 
 ## Delivery layout
 
-- `images/` in this repo holds every image that fits under GitHub's 100 MB per-file limit (20 files, including the stock `imagefv_stock.img` backup and the two issue #21 `imagefv` builds).
+- `images/` in this repo holds every image that fits under GitHub's 100 MB per-file limit (24 files, including the stock `imagefv_stock.img` backup and the issue #21/#23 `imagefv` builds).
 - The larger images — `boot.img` (128 MB), `core_nhlos.img` (132 MB), `modem.img` (192 MB), `vendor_boot.img` (96 MB) and the 14 `super.img.N` sparse chunks (~512 MB each) — are attached as release assets:
   https://github.com/promikailamin/hyperos_haptic_ports/releases/tag/xemu-veux-os1.0.10.0-images
 
@@ -20,18 +20,27 @@ They have been extracted and converted to PNG in [`splash/`](splash/). See
 [`splash/README.md`](splash/README.md) for the full listing, extraction method
 and checksums.
 
-The custom `logo_m_unlock` supplied in issue #21 has been patched into two
-different `imagefv` builds:
+The custom logo supplied in issues #19/#21 is 300×2400, which matches the **Mi**
+slot (`logo_m_unlock`). A Redmi-branded veux device renders `logo_r_unlock`
+(300×2250), so the earlier builds patched the wrong resource. Issue #23 adds
+Redmi and combined builds: `splash/logo_r_unlock_custom.png` is the supplied
+logo centre-cropped from 300×2400 to the Redmi slot's 300×2250.
 
 | File | SHA-256 | Notes |
 | --- | --- | --- |
 | `images/imagefv_stock.img` | `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed` | Stock OEM-signed recovery image. Unchanged. |
-| `images/imagefv.img` | `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65` | Issue #21 logo. The payload is edited but the Qualcomm hash table/OEM signature is left untouched, so the OEM signature is still valid while the segment hashes are stale. Try this first. |
-| `images/imagefv_rehashed.img` | `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718` | Issue #21 logo with the Qualcomm hash table rebuilt. The UEFI structure and hashes are self-consistent, but the OEM signature is invalid. |
+| `images/imagefv_mr_unlock.img` | `c36ce21e1232bb5b17249d8ed72e56acf8f298fc728c83a069f82127b37bc892` | Issue #23. Patches both `logo_m_unlock` and `logo_r_unlock`; OEM signature preserved, segment hashes stale. Best first try for a Redmi device. |
+| `images/imagefv_mr_unlock_rehashed.img` | `422d0620b1a4e0818d6a1b0bd111a7975b731203853909147292afd3e8f9d976` | Issue #23 combined build with the Qualcomm hash table rebuilt; OEM signature invalid. |
+| `images/imagefv_r_unlock.img` | `1debe8cf2c1c281f43649c2288b560142e82a02a965574bb7f3e68a8dee07086` | Issue #23. Patches only `logo_r_unlock`; OEM signature preserved, segment hashes stale. |
+| `images/imagefv_r_unlock_rehashed.img` | `e76fb0d0202b00c34bde1a7a10e7e3bcdd1c7fa2ec84555510b8758ddbb299a9` | Issue #23 Redmi-only build with the Qualcomm hash table rebuilt; OEM signature invalid. |
+| `images/imagefv.img` | `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65` | Issue #21 Mi-only logo; OEM signature preserved, segment hashes stale. |
+| `images/imagefv_rehashed.img` | `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718` | Issue #21 Mi-only logo with the hash table rebuilt; OEM signature invalid. |
 
-Only `logo_m_unlock.bmp` differs from stock in either build; all 16 other
-embedded graphics are byte-identical to the stock image. The supplied logo is
-identical to the one used for issue #19, so the earlier black screen was not
+The issue #23 builds are attached to the
+[`imagefv-veux-logo-unlock-issue23`](https://github.com/promikailamin/hyperos_haptic_ports/releases/tag/imagefv-veux-logo-unlock-issue23)
+release. Only the unlock logo resource(s) differ from stock in each build; all
+other embedded graphics are byte-identical to the stock image. The supplied logo
+is identical to the one used for issue #19, so the earlier black screen was not
 caused by the PNG/BMP conversion or by corrupt UEFI containers.
 
 `imagefv` is a Qualcomm signed ELF. The SHA-384 hash table covers the ELF
@@ -39,9 +48,12 @@ header/program headers and every loaded segment (including the splash images),
 and Xiaomi's RSA-PSS signature covers that hash table. Fully valid custom
 graphics therefore require re-signing with Xiaomi's private key, which is not
 available. A bootloader that verifies both the OEM signature and the segment
-hashes will not render either custom build. If the bootloader only checks the
-OEM signature, the signature-preserving `images/imagefv.img` has the best chance
-of working; if it skips `imagefv` verification, use the rehashed build.
+hashes will not render any custom build. If the bootloader only checks the OEM
+signature, use `images/imagefv_mr_unlock.img`; if it skips `imagefv`
+verification, use `images/imagefv_mr_unlock_rehashed.img`. If a Redmi device
+still shows a black screen after flashing these, flash `images/imagefv_stock.img`
+to recover and provide the exact stock `imagefv` from the installed ROM so it can
+be patched instead of the xiaomi.eu copy.
 
 [`tools/imagefv_tool.py`](tools/imagefv_tool.py) can unpack, inspect and
 repackage the image, and it verifies the embedded OEM signature. `repack`
