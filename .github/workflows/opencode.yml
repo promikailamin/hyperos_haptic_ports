@@ -45,7 +45,7 @@ jobs:
           {
             "$schema": "https://opencode.ai/config.json",
             "permission": "allow",
-            "model": "opencode/deepseek-v4.1-flash-free"
+            "model": "opencode/glm-5.3-flash-free"
           }
           JSON
 
@@ -105,6 +105,6 @@ jobs:
           )"
 
           opencode run \
-              --model opencode/deepseek-v4.1-flash-free \
+              --model opencode/glm-5.3-flash-free \
               --auto \
               "$prompt" 2>&1 | tee opencode-output.log
