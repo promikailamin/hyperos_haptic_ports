@@ -13,18 +13,18 @@ the official fastboot ROM and `imagefv.img` in this repository).
 
 - ROM: `veux_global_images_OS1.0.12.0.TKCMIXM_20241205.0000.00_13.0_global_cda1240a45.tgz`
 - Source image: `images/imagefv.elf` from that ROM
-- Patched image: [`../images/imagefv.img`](../images/imagefv.img), custom
-  `logo_m_unlock` (SHA-256
-  `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718`)
-- Stock backup: [`../images/imagefv_stock.img`](../images/imagefv_stock.img),
-  OEM-signed (SHA-256
-  `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`)
+- Stock image: [`../images/imagefv.img`](../images/imagefv.img), OEM-signed
+  (SHA-256 `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`)
+- Stock recovery copy: [`../images/imagefv_stock.img`](../images/imagefv_stock.img),
+  byte-identical to `imagefv.img`
 
-The checked-in `imagefv.img` has been patched with the logo supplied in
+The checked-in `imagefv.img` is the stock image. The custom-logo build from
 [issue #19](https://github.com/promikailamin/hyperos_haptic_ports/issues/19)
-using the tool below. The tool rebuilt all UEFI layers and refreshed the
-Qualcomm hash table, but it cannot recreate Xiaomi's OEM signature. The stock
-image is preserved as `imagefv_stock.img` for recovery.
+has been withdrawn: it rebuilt all UEFI layers and refreshed the Qualcomm hash
+table, but it could not recreate Xiaomi's OEM signature. A bootloader that
+verifies `imagefv` rejects it, and flashing it can leave the device unable to
+boot. The custom `logo_m_unlock.png` is still available as an asset for anyone
+who can re-sign the image.
 
 ## How the extraction was done
 
@@ -55,36 +55,40 @@ python3 tools/imagefv_tool.py info images/imagefv.img
 # extract the 17 BMPs
 python3 tools/imagefv_tool.py extract images/imagefv.img -o extracted
 
-# replace one image and rebuild every layer
+# replace one image and rebuild every layer (only for inspection/unlocked devices)
 python3 tools/imagefv_tool.py repack images/imagefv.img \
     -o imagefv_custom.img \
-    --replace logo_m_unlock=extracted/logo_m_unlock.bmp
+    --replace logo_m_unlock=extracted/logo_m_unlock.bmp \
+    --allow-unsigned
 
-# validate UEFI checksums and the Qualcomm hash table
+# validate UEFI checksums, the hash table and the OEM signature
 python3 tools/imagefv_tool.py verify imagefv_custom.img
 ```
 
 Replacement images must have exactly the same dimensions and be 24-bit,
 uncompressed BMP (PNG input is converted automatically when Pillow is
 installed). The tool refuses replacements that would not fit the original slot.
+`repack` also refuses to write an edited signed image unless `--allow-unsigned`
+is given, because the result is rejected by the bootloader.
 
 ## Custom `logo_m_unlock` replacement
 
 The 300×2400 logo supplied in issue #19 was flattened onto black for the
 firmware's 24-bit BMP (the PNG has an alpha channel, the firmware does not).
-It was applied to the stock image with:
+The repack command was:
 
 ```bash
 python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
-    -o images/imagefv.img \
-    --replace logo_m_unlock=splash/logo_m_unlock.png
-python3 tools/imagefv_tool.py verify images/imagefv.img
+    -o imagefv_custom.img \
+    --replace logo_m_unlock=splash/logo_m_unlock.png \
+    --allow-unsigned
+python3 tools/imagefv_tool.py verify imagefv_custom.img   # fails: OEM signature invalid
 ```
 
 - Replacement logo: [`logo_m_unlock.png`](logo_m_unlock.png) (300×2400)
 - Embedded BMP: `logo_m_unlock.bmp` (300×2400, 24-bit)
-- Patched `imagefv.img` SHA-256:
-  `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718`
+- The resulting custom image was **not** released or kept as `imagefv.img`
+  because it cannot pass the bootloader's signature check.
 
 ## Repacking and signature warning
 
@@ -99,16 +103,17 @@ segment at file offset `0x1000` is an MBN version 6 hash segment containing
 The old issue #17 repack changed the firmware volume but left that hash table
 untouched, so the image did not even match its own hashes. `tools/imagefv_tool.py`
 now rebuilds the LZMA section, GUIDed section, FFS file, firmware volume and the
-Qualcomm SHA-384 hash table correctly. However, the OEM RSA signature is made
-with Xiaomi's private key, which is not available here. Refreshing the hash table
-changes the signed data, so the patched `images/imagefv.img` is no longer
-OEM-signed and a locked bootloader will normally reject it. There is no
+Qualcomm SHA-384 hash table correctly, and it verifies the embedded OEM
+signature. However, the OEM RSA-PSS signature is made with Xiaomi's private key,
+which is not available here. Refreshing the hash table changes the signed data,
+so a repacked image is no longer OEM-signed and a bootloader that verifies
+`imagefv` rejects it (this is why the issue #19 image did not work). There is no
 software-only way around that without re-signing with the OEM key or using a
 bootloader that skips `imagefv` verification.
 
 If you need to recover a device after flashing a bad `imagefv`, flash the stock
-`images/imagefv_stock.img` from this repository/release, or use EDL/Qualcomm
-recovery if the bootloader no longer starts.
+`images/imagefv_stock.img` (or `images/imagefv.img`) from this repository/release,
+or use EDL/Qualcomm recovery if the bootloader no longer starts.
 
 ## Assets
 
@@ -149,5 +154,5 @@ Checksums for all PNGs are in [`SHA256SUMS.txt`](SHA256SUMS.txt).
 
 `imagefv` is verified by the bootloader (it contains an OEM-signed Qualcomm hash
 segment), so modifying or reflashing it can hard-brick the device. The checked-in
-`images/imagefv.img` is the patched, unsigned version; keep
-`images/imagefv_stock.img` as the stock backup.
+`images/imagefv.img` and `images/imagefv_stock.img` are both the stock,
+OEM-signed image. Do not flash an edited image unless you can re-sign it.

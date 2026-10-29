@@ -15,12 +15,22 @@ SPEC.loader.exec_module(imagefv_tool)
 class ImagefvToolTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.image_path = ROOT / "images" / "imagefv_stock.img"
-        cls.data = cls.image_path.read_bytes()
+        cls.stock_path = ROOT / "images" / "imagefv_stock.img"
+        cls.data = cls.stock_path.read_bytes()
         cls.image = imagefv_tool.SplashImage(cls.data)
-        cls.patched_path = ROOT / "images" / "imagefv.img"
-        cls.patched_data = cls.patched_path.read_bytes()
-        cls.patched_image = imagefv_tool.SplashImage(cls.patched_data)
+        cls.checked_in_path = ROOT / "images" / "imagefv.img"
+        cls.checked_in_data = cls.checked_in_path.read_bytes()
+        cls.checked_in_image = imagefv_tool.SplashImage(cls.checked_in_data)
+
+    def _modified_logo(self, tmp: Path) -> Path:
+        logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")
+        raw = next(s for s in logo.sections if s.type == imagefv_tool.SECTION_TYPE_RAW)
+        bmp = bytearray(raw.data)
+        pixel_offset = struct.unpack_from("<I", bmp, 10)[0]
+        bmp[pixel_offset] ^= 0x01
+        path = tmp / "logo_m_unlock.bmp"
+        path.write_bytes(bytes(bmp))
+        return path
 
     def test_stock_image_parses_and_hashes_match(self):
         self.assertEqual(len(self.image.inner.files), 17)
@@ -28,13 +38,15 @@ class ImagefvToolTests(unittest.TestCase):
         self.assertTrue(self.image.outer.header_valid())
         self.assertTrue(self.image.inner.header_valid())
         self.assertTrue(self.image.hash.matches(self.data))
+        self.assertTrue(self.image.hash.oem_signature_valid())
 
-    def test_patched_image_parses_and_hashes_match(self):
-        self.assertEqual(len(self.patched_image.inner.files), 17)
-        self.assertTrue(self.patched_image.outer.header_valid())
-        self.assertTrue(self.patched_image.inner.header_valid())
-        self.assertTrue(self.patched_image.hash.matches(self.patched_data))
-        self.assertNotEqual(self.patched_data, self.data)
+    def test_checked_in_image_is_stock_and_signed(self):
+        self.assertEqual(self.checked_in_data, self.data)
+        self.assertEqual(len(self.checked_in_image.inner.files), 17)
+        self.assertTrue(self.checked_in_image.outer.header_valid())
+        self.assertTrue(self.checked_in_image.inner.header_valid())
+        self.assertTrue(self.checked_in_image.hash.matches(self.checked_in_data))
+        self.assertTrue(self.checked_in_image.hash.oem_signature_valid())
 
     def test_unchanged_repack_preserves_signed_image(self):
         logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")
@@ -44,16 +56,11 @@ class ImagefvToolTests(unittest.TestCase):
             bmp.write_bytes(raw.data)
             result = self.image.repack({"logo_m_unlock.bmp": bmp})
         self.assertEqual(result, self.data)
+        self.assertTrue(imagefv_tool.SplashImage(result).hash.oem_signature_valid())
 
-    def test_modified_image_rebuilds_uefi_and_hash_table(self):
-        logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")
-        raw = next(s for s in logo.sections if s.type == imagefv_tool.SECTION_TYPE_RAW)
-        bmp = bytearray(raw.data)
-        pixel_offset = struct.unpack_from("<I", bmp, 10)[0]
-        bmp[pixel_offset] ^= 0x01
+    def test_modified_image_rebuilds_uefi_but_invalidates_signature(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "logo_m_unlock.bmp"
-            path.write_bytes(bytes(bmp))
+            path = self._modified_logo(Path(tmp))
             result = self.image.repack({"logo_m_unlock.bmp": path})
             output = Path(tmp) / "imagefv.img"
             output.write_bytes(result)
@@ -61,8 +68,28 @@ class ImagefvToolTests(unittest.TestCase):
             self.assertTrue(check.outer.header_valid())
             self.assertTrue(check.inner.header_valid())
             self.assertTrue(check.hash.matches(result))
+            self.assertFalse(check.hash.oem_signature_valid())
             self.assertNotEqual(result, self.data)
-            self.assertEqual(imagefv_tool.main(["verify", str(output)]), 0)
+            self.assertEqual(imagefv_tool.main(["verify", str(output)]), 1)
+
+    def test_repack_refuses_unsigned_output_without_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._modified_logo(Path(tmp))
+            output = Path(tmp) / "imagefv.img"
+            args = [
+                "repack",
+                str(self.stock_path),
+                "-o",
+                str(output),
+                "--replace",
+                f"logo_m_unlock={path}",
+            ]
+            self.assertEqual(imagefv_tool.main(args), 2)
+            self.assertFalse(output.exists())
+
+            self.assertEqual(imagefv_tool.main(args + ["--allow-unsigned"]), 0)
+            self.assertTrue(output.exists())
+            self.assertEqual(imagefv_tool.main(["verify", str(output)]), 1)
 
 
 if __name__ == "__main__":

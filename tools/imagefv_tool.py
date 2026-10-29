@@ -12,11 +12,12 @@ The veux ``imagefv`` is a Qualcomm signed ELF:
                     FFS files named "logo_*.bmp" / "battery_symbol_*.bmp"
 
 The UEFI layers are rebuilt byte-for-byte and the Qualcomm SHA-256/384 table
-is refreshed, so the output is structurally correct.  The OEM RSA signature
+is refreshed, so the output is structurally correct.  The OEM RSA-PSS signature
 that covers the hash table cannot be regenerated without Xiaomi's private key;
-this tool therefore tells you when an edited image is no longer signed.  A
-signed stock image is always kept by the repository, because a modified
-``imagefv`` is normally rejected by the bootloader.
+the tool verifies that signature using the certificate embedded in the image
+and refuses to write an edited image by default.  A signed stock image is always
+kept by the repository, because a modified ``imagefv`` is normally rejected by
+the bootloader.
 """
 
 from __future__ import annotations
@@ -89,6 +90,122 @@ def ffs_header_checksum(header: bytes) -> int:
 
 def sha_for_entry_size(size: int) -> str:
     return {32: "sha256", 48: "sha384", 64: "sha512"}.get(size, "sha384")
+
+
+def _der_parse(data: bytes, offset: int = 0) -> tuple[int, bytes, int]:
+    """Return (tag, content, end_offset) for one DER TLV."""
+    if offset + 2 > len(data):
+        raise ImagefvError("truncated DER value")
+    tag = data[offset]
+    length = data[offset + 1]
+    position = offset + 2
+    if length & 0x80:
+        count = length & 0x7F
+        if count == 0 or position + count > len(data):
+            raise ImagefvError("invalid DER length")
+        length = int.from_bytes(data[position : position + count], "big")
+        position += count
+    end = position + length
+    if end > len(data):
+        raise ImagefvError("DER value extends past its container")
+    return tag, data[position:end], end
+
+
+def _der_children(content: bytes):
+    position = 0
+    while position < len(content):
+        tag, value, position = _der_parse(content, position)
+        yield tag, value
+
+
+class RsaPublicKey:
+    def __init__(self, modulus: int, exponent: int):
+        self.modulus = modulus
+        self.exponent = exponent
+
+    @classmethod
+    def from_certificate(cls, certificate: bytes) -> "RsaPublicKey":
+        """Extract the RSA public key from the first DER certificate."""
+        tag, cert, _ = _der_parse(certificate, 0)
+        if tag != 0x30:
+            raise ImagefvError("certificate is not a DER sequence")
+        tbs_tag, tbs, _ = _der_parse(cert, 0)
+        if tbs_tag != 0x30:
+            raise ImagefvError("certificate body is not a DER sequence")
+        for tag, value in _der_children(tbs):
+            if tag != 0x30:
+                continue
+            children = list(_der_children(value))
+            if len(children) < 2 or children[0][0] != 0x30 or children[1][0] != 0x03:
+                continue
+            oid_tag, oid, _ = _der_parse(children[0][1], 0)
+            if oid_tag != 0x06 or oid != b"\x2a\x86\x48\x86\xf7\x0d\x01\x01\x01":
+                continue
+            bit_string = children[1][1]
+            if not bit_string or bit_string[0] != 0:
+                raise ImagefvError("unsupported RSA public-key bit string")
+            key_tag, key, _ = _der_parse(bit_string, 1)
+            if key_tag != 0x30:
+                raise ImagefvError("RSA public key is not a DER sequence")
+            values = list(_der_children(key))
+            if len(values) < 2 or values[0][0] != 0x02 or values[1][0] != 0x02:
+                raise ImagefvError("invalid RSA public key")
+            modulus = int.from_bytes(values[0][1], "big")
+            exponent = int.from_bytes(values[1][1], "big")
+            return cls(modulus, exponent)
+        raise ImagefvError("certificate does not contain an RSA public key")
+
+
+def _mgf1(seed: bytes, length: int) -> bytes:
+    output = bytearray()
+    counter = 0
+    while len(output) < length:
+        output += hashlib.sha256(seed + struct.pack(">I", counter)).digest()
+        counter += 1
+    return bytes(output[:length])
+
+
+def rsa_pss_sha256_verify(
+    public_key: RsaPublicKey, message: bytes, signature: bytes
+) -> bool:
+    """Verify an RSA-PSS/SHA-256 signature (salt length = digest length)."""
+    hash_size = hashlib.sha256().digest_size
+    salt_size = hash_size
+    modulus_bits = public_key.modulus.bit_length()
+    em_bits = modulus_bits - 1
+    em_length = (em_bits + 7) // 8
+    if len(signature) != (modulus_bits + 7) // 8:
+        return False
+    value = int.from_bytes(signature, "big")
+    if value >= public_key.modulus:
+        return False
+    encoded = pow(value, public_key.exponent, public_key.modulus).to_bytes(
+        em_length, "big"
+    )
+    if encoded[-1] != 0xBC:
+        return False
+    db_length = em_length - hash_size - 1
+    masked_db = encoded[:db_length]
+    h = encoded[db_length : db_length + hash_size]
+    unused_bits = 8 * em_length - em_bits
+    if unused_bits and masked_db[0] >> (8 - unused_bits):
+        return False
+    db = bytes(a ^ b for a, b in zip(masked_db, _mgf1(h, db_length)))
+    if unused_bits:
+        db = bytes([db[0] & (0xFF >> unused_bits)]) + db[1:]
+    padding_length = em_length - hash_size - salt_size - 2
+    if padding_length < 0:
+        return False
+    if any(db[index] != 0 for index in range(padding_length)):
+        return False
+    if db[padding_length] != 0x01:
+        return False
+    salt = db[padding_length + 1 :]
+    if len(salt) != salt_size:
+        return False
+    message_hash = hashlib.sha256(message).digest()
+    expected = hashlib.sha256(b"\x00" * 8 + message_hash + salt).digest()
+    return h == expected
 
 
 class ProgramHeader:
@@ -283,6 +400,38 @@ class HashSegment:
 
     def is_signed(self) -> bool:
         return any(self.signature_sizes)
+
+    def oem_signature_and_certificates(self) -> tuple[bytes, bytes] | tuple[None, None]:
+        """Return the OEM signature and certificate chain, if present."""
+        qss, qcs, oss, ocs = self.signature_sizes
+        if not oss or not ocs:
+            return None, None
+        signature_offset = self.hash_table_end + qss + qcs
+        certificate_offset = signature_offset + oss
+        signature = self.segment[signature_offset : signature_offset + oss]
+        certificates = self.segment[certificate_offset : certificate_offset + ocs]
+        if len(signature) != oss or len(certificates) != ocs:
+            return None, None
+        return signature, certificates
+
+    def oem_signature_valid(self) -> bool | None:
+        """Verify the OEM RSA-PSS signature using the embedded certificate.
+
+        Returns ``None`` when the image has no OEM signature. Verification uses
+        only the certificate stored in the image; the trust chain is not checked.
+        """
+        signature, certificates = self.oem_signature_and_certificates()
+        if signature is None or certificates is None:
+            return None
+        try:
+            public_key = RsaPublicKey.from_certificate(certificates)
+        except ImagefvError:
+            return False
+        signed = self.segment[: self.hash_table_end]
+        if rsa_pss_sha256_verify(public_key, signed, signature):
+            return True
+        # Some images sign only the hash table rather than the header + table.
+        return rsa_pss_sha256_verify(public_key, self.hash_table, signature)
 
 
 class Section:
@@ -711,6 +860,9 @@ class SplashImage:
                 "hash_segment_version": self.hash.version,
                 "hash": self.hash.hash_name,
                 "signed": self.hash.is_signed(),
+                "oem_signature_present": self.hash.oem_signature_and_certificates()[0]
+                is not None,
+                "oem_signature_valid": self.hash.oem_signature_valid(),
             },
             "outer_fv": {
                 "length": self.outer.length,
@@ -741,6 +893,14 @@ def cmd_info(args: argparse.Namespace) -> int:
             "this image will be rejected by a locked bootloader.",
             file=sys.stderr,
         )
+    if report["elf"]["oem_signature_present"] and not report["elf"][
+        "oem_signature_valid"
+    ]:
+        print(
+            "WARNING: the OEM signature is invalid; this modified image will be "
+            "rejected by the bootloader unless it is unlocked/verification is skipped.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -768,24 +928,45 @@ def cmd_repack(args: argparse.Namespace) -> int:
         print("no replacements requested; copied input unchanged")
         return 0
     result = image.repack(replacements, update_hashes=not args.keep_hash_table)
-    Path(args.output).write_bytes(result)
 
     check = SplashImage(result)
     if not check.hash.matches(result) and not args.keep_hash_table:
         raise ImagefvError("internal error: rebuilt hash table does not validate")
+    if result == image.data:
+        Path(args.output).write_bytes(result)
+        print(f"wrote {args.output} ({len(result)} bytes)")
+        print("payload identical to input; original signature preserved")
+        return 0
+
+    original_valid = image.hash.oem_signature_valid()
+    new_valid = check.hash.oem_signature_valid()
+    if (
+        not args.keep_hash_table
+        and original_valid
+        and not new_valid
+        and not args.allow_unsigned
+    ):
+        raise ImagefvError(
+            "refusing to write an unsigned imagefv: the Qualcomm OEM signature "
+            "covers the hash table and cannot be recreated without Xiaomi's "
+            "private key, so the bootloader will reject this edit. Pass "
+            "--allow-unsigned only if you understand the risk or your bootloader "
+            "skips imagefv verification."
+        )
+
+    Path(args.output).write_bytes(result)
     print(f"wrote {args.output} ({len(result)} bytes)")
     print("structure: OK")
-    if result == image.data:
-        print("payload identical to input; original signature preserved")
+    print(
+        "hash table: refreshed"
+        if not args.keep_hash_table
+        else "hash table: kept (will not match edited data)"
+    )
+    if new_valid:
+        print("OEM signature: OK")
     else:
         print(
-            "hash table: refreshed"
-            if not args.keep_hash_table
-            else "hash table: kept (will not match edited data)"
-        )
-        print(
-            "WARNING: the Qualcomm OEM signature covers the hash table and cannot "
-            "be regenerated without Xiaomi's private key. Edited imagefv images are "
+            "WARNING: the OEM signature is invalid. Edited imagefv images are "
             "normally rejected by the bootloader; keep the stock image for recovery."
         )
     return 0
@@ -807,17 +988,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 failures.append(
                     f"{fv_name} FFS file {file.name or file.guid.hex()} header checksum is invalid"
                 )
+    oem_valid = image.hash.oem_signature_valid()
+    if oem_valid is False:
+        failures.append(
+            "OEM signature is invalid (the image was modified after signing)"
+        )
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}")
         return 1
     print("UEFI structure: OK")
     print("Qualcomm hash table: OK")
-    if image.hash.is_signed():
-        print(
-            "OEM signature present: not checkable without the Xiaomi certificate "
-            "chain/key; any edit to the hash table invalidates it."
-        )
+    if oem_valid is True:
+        print("OEM signature: OK (verified with the embedded certificate)")
+    elif oem_valid is None:
+        print("OEM signature: absent")
     return 0
 
 
@@ -850,6 +1035,14 @@ def main(argv: list[str] | None = None) -> int:
         "--keep-hash-table",
         action="store_true",
         help="do not refresh the Qualcomm hash table (only useful for inspection)",
+    )
+    repack.add_argument(
+        "--allow-unsigned",
+        action="store_true",
+        help=(
+            "write an edited image even though the OEM signature becomes invalid "
+            "(normally rejected by the bootloader)"
+        ),
     )
     repack.set_defaults(func=cmd_repack)
 

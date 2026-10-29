@@ -20,22 +20,26 @@ symbols and thermal warnings are embedded in the `imagefv` UEFI firmware volume
 PNG in [`splash/`](splash/). See [`splash/README.md`](splash/README.md) for the
 full listing, extraction method and checksums.
 
-`images/imagefv.img` has been patched with the custom `logo_m_unlock` supplied
-in [issue #19](https://github.com/promikailamin/hyperos_haptic_ports/issues/19),
-using [`tools/imagefv_tool.py`](tools/imagefv_tool.py). The tool rebuilt every
-UEFI layer and refreshed the Qualcomm hash table, so the patched file is
-structurally consistent (SHA-256
-`189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718`). All other
-embedded graphics are unchanged.
+`images/imagefv.img` is the **stock, OEM-signed** image (SHA-256
+`3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`). It is
+identical to `images/imagefv_stock.img`, which is kept as an explicit recovery
+copy. The custom-logo build that was previously distributed here has been
+withdrawn because it does not boot.
 
-The patched image is **not OEM-signed**: `imagefv` is a Qualcomm signed ELF and
-the private key needed to re-sign it is not available. A locked bootloader will
-normally reject an edited `imagefv`. The original stock, OEM-signed image is
-kept as `images/imagefv_stock.img` (SHA-256
-`3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`) for
-recovery. See
-[`splash/README.md`](splash/README.md#repacking-and-signature-warning) for
-details.
+`imagefv` is a Qualcomm signed ELF. The SHA-384 hash table covers the ELF
+header/program headers and every loaded segment (including the splash images),
+and Xiaomi's RSA-PSS signature covers that hash table. Editing any splash image
+therefore requires re-signing with Xiaomi's private key. The key is not
+available, so an edited image is rejected by the bootloader even when all UEFI
+checksums and the hash table are rebuilt correctly.
+
+[`tools/imagefv_tool.py`](tools/imagefv_tool.py) can still unpack, inspect and
+repackage the image, and it now verifies the embedded OEM signature. `repack`
+refuses to write an edited image by default because the result cannot boot;
+`--allow-unsigned` is available only for inspection or devices whose bootloader
+skips `imagefv` verification. See
+[`splash/README.md`](splash/README.md#repacking-and-signature-warning) and
+[`tools/README.md`](tools/README.md) for details.
 
 ## Reassembling super.img
 
