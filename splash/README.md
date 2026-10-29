@@ -14,14 +14,12 @@ the official fastboot ROM and `imagefv.img` in this repository).
 - ROM: `veux_global_images_OS1.0.12.0.TKCMIXM_20241205.0000.00_13.0_global_cda1240a45.tgz`
 - Source image: `images/imagefv.elf` from that ROM
 - Local copy: [`../images/imagefv.img`](../images/imagefv.img)
-- Current (repacked) SHA-256: `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65`
-- Stock ROM SHA-256: `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`
+- Checked-in SHA-256: `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`
+  (stock, OEM-signed)
 
-The checked-in `imagefv.img` has been repacked with a custom
-`logo_m_unlock` (see below). All other assets are unchanged from the stock
-firmware. The original stock `imagefv.img` is still available from the
-[`xemu-veux-os1.0.10.0-images`](https://github.com/promikailamin/hyperos_haptic_ports/releases/tag/xemu-veux-os1.0.10.0-images)
-release.
+The checked-in `imagefv.img` is the original signed image. A custom repack from
+[issue #17](https://github.com/promikailamin/hyperos_haptic_ports/issues/17) was
+removed because it was rejected by the bootloader and could brick the device.
 
 ## How the extraction was done
 
@@ -41,26 +39,56 @@ for src in Path("extracted_images").glob("*.bmp"):
 PY
 ```
 
-## Custom `logo_m_unlock` replacement
+The repository also includes [`../tools/imagefv_tool.py`](../tools/imagefv_tool.py),
+a dependency-free (except optional Pillow for PNG input/output) unpack/edit/repack
+tool that understands all of the nested layers:
 
-[Issue #17](https://github.com/promikailamin/hyperos_haptic_ports/issues/17)
-supplied a replacement 300×2400 RGBA logo. Because the firmware stores these
-graphics as 24-bit BMPs without an alpha channel, the new PNG was flattened
-over black (the bootloader background) and saved using the original BMP header.
-That BMP replaced the raw section of the `logo_m_unlock.bmp` FFS file inside
-the inner firmware volume.
+```bash
+# show the ELF, UEFI firmware volumes, images and hash-table status
+python3 tools/imagefv_tool.py info images/imagefv.img
 
-The inner volume was then recompressed as a single LZMA stream, and the outer
-GUIDed section size, FFS file size and FFS header checksum were rebuilt. The FV
-header and all other embedded graphics were left untouched. Extracting the
-repacked image with `imagefv_extractor` yields all 17 BMPs, with only
-`logo_m_unlock.bmp` changed.
+# extract the 17 BMPs
+python3 tools/imagefv_tool.py extract images/imagefv.img -o extracted
 
-- Replacement logo: [`logo_m_unlock.png`](logo_m_unlock.png) (300×2400,
-  flattened onto black for the embedded BMP)
-- Embedded BMP: `logo_m_unlock.bmp` (300×2400, 24-bit)
-- Final `imagefv.img` SHA-256:
-  `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65`
+# replace one image and rebuild every layer
+python3 tools/imagefv_tool.py repack images/imagefv.img \
+    -o imagefv_custom.img \
+    --replace logo_m_unlock=extracted/logo_m_unlock.bmp
+
+# validate UEFI checksums and the Qualcomm hash table
+python3 tools/imagefv_tool.py verify imagefv_custom.img
+```
+
+Replacement images must have exactly the same dimensions and be 24-bit,
+uncompressed BMP (PNG input is converted automatically when Pillow is
+installed). The tool refuses replacements that would not fit the original slot.
+
+## Repacking and signature warning
+
+`imagefv` is not a plain UEFI container: it is a **Qualcomm signed ELF**. The
+segment at file offset `0x1000` is an MBN version 6 hash segment containing
+
+- SHA-384 hashes of the ELF header/program headers and of the firmware-volume
+  segment,
+- an OEM certificate chain and an RSA signature over the hash table and
+  metadata.
+
+The previous custom repack changed the firmware volume but left that hash table
+untouched, so the image no longer matched its own hashes. That is why it failed
+to boot (and why it could brick a device).
+
+`tools/imagefv_tool.py` rebuilds the LZMA section, GUIDed section, FFS file,
+firmware volume and the Qualcomm SHA-384 hash table correctly. However, the OEM
+RSA signature is made with Xiaomi's private key, which is not available here.
+Refreshing the hash table changes the signed data, so an edited image is no
+longer OEM-signed and a locked bootloader will normally reject it. There is no
+software-only way around that without re-signing with the OEM key or using a
+bootloader that skips `imagefv` verification.
+
+For that reason the stock `images/imagefv.img` is kept unchanged. If you need to
+recover a device after flashing a bad `imagefv`, flash the stock image from this
+repository/release, or use EDL/Qualcomm recovery if the bootloader no longer
+starts.
 
 ## Assets
 
@@ -75,7 +103,7 @@ repacked image with `imagefv_extractor` yields all 17 BMPs, with only
 | `battery_symbol_Soc10.png` | 545×237 | 476 |
 | `logo_destory.png` | 1080×2400 | 19,908 |
 | `logo_fastboot.png` | 1080×2400 | 16,256 |
-| `logo_m_unlock.png` | 300×2400 | 16,619 |
+| `logo_m_unlock.png` | 300×2400 | 22,244 |
 | `logo_mi.png` | 300×1400 | 19,445 |
 | `logo_p_unlock.png` | 300×2250 | 22,576 |
 | `logo_poco.png` | 300×1250 | 19,858 |
@@ -99,6 +127,6 @@ Checksums for all PNGs are in [`SHA256SUMS.txt`](SHA256SUMS.txt).
 
 ## Reflashing note
 
-`imagefv` is verified by the bootloader (it contains CoT certificates), so
-modifying or reflashing it can hard-brick the device. These files are provided
-for inspection/extraction only.
+`imagefv` is verified by the bootloader (it contains an OEM-signed Qualcomm hash
+segment), so modifying or reflashing it can hard-brick the device. These files
+are provided for inspection/extraction only; always keep a stock backup.
