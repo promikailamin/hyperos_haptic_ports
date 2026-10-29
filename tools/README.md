@@ -60,9 +60,11 @@ not available, so the tool cannot re-sign an edited image. It refreshes the
 hash table (so the structure is self-consistent), but the OEM signature becomes
 invalid. Bootloaders that verify `imagefv` will reject the result.
 
-Keep the stock `images/imagefv.img` for recovery. The stock file is the
-OEM-signed image with SHA-256
+Keep the stock `images/imagefv_stock.img` for recovery. It is the OEM-signed
+image with SHA-256
 `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`.
+`images/imagefv.img` is the patched custom-logo image (SHA-256
+`189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718`).
 
 ## Tests
 

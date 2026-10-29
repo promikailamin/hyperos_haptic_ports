@@ -15,9 +15,12 @@ SPEC.loader.exec_module(imagefv_tool)
 class ImagefvToolTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.image_path = ROOT / "images" / "imagefv.img"
+        cls.image_path = ROOT / "images" / "imagefv_stock.img"
         cls.data = cls.image_path.read_bytes()
         cls.image = imagefv_tool.SplashImage(cls.data)
+        cls.patched_path = ROOT / "images" / "imagefv.img"
+        cls.patched_data = cls.patched_path.read_bytes()
+        cls.patched_image = imagefv_tool.SplashImage(cls.patched_data)
 
     def test_stock_image_parses_and_hashes_match(self):
         self.assertEqual(len(self.image.inner.files), 17)
@@ -25,6 +28,13 @@ class ImagefvToolTests(unittest.TestCase):
         self.assertTrue(self.image.outer.header_valid())
         self.assertTrue(self.image.inner.header_valid())
         self.assertTrue(self.image.hash.matches(self.data))
+
+    def test_patched_image_parses_and_hashes_match(self):
+        self.assertEqual(len(self.patched_image.inner.files), 17)
+        self.assertTrue(self.patched_image.outer.header_valid())
+        self.assertTrue(self.patched_image.inner.header_valid())
+        self.assertTrue(self.patched_image.hash.matches(self.patched_data))
+        self.assertNotEqual(self.patched_data, self.data)
 
     def test_unchanged_repack_preserves_signed_image(self):
         logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")

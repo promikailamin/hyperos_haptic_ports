@@ -8,7 +8,7 @@ Source ROM: [xiaomi.eu_VEUX_OS1.0.10.0.TKCCNXM_13.zip](https://sourceforge.net/p
 
 ## Delivery layout
 
-- `images/` in this repo holds every image that fits under GitHub's 100 MB per-file limit (18 files).
+- `images/` in this repo holds every image that fits under GitHub's 100 MB per-file limit (19 files, including the stock `imagefv_stock.img` backup).
 - The larger images — `boot.img` (128 MB), `core_nhlos.img` (132 MB), `modem.img` (192 MB), `vendor_boot.img` (96 MB) and the 14 `super.img.N` sparse chunks (~512 MB each) — are attached as release assets:
   https://github.com/promikailamin/hyperos_haptic_ports/releases/tag/xemu-veux-os1.0.10.0-images
 
@@ -20,17 +20,20 @@ symbols and thermal warnings are embedded in the `imagefv` UEFI firmware volume
 PNG in [`splash/`](splash/). See [`splash/README.md`](splash/README.md) for the
 full listing, extraction method and checksums.
 
-`images/imagefv.img` is the **stock, OEM-signed** image (SHA-256
-`3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`). It was
-restored after the custom repack in issue #17 turned out to be rejected by the
-bootloader: `imagefv` is a Qualcomm signed ELF, and changing the firmware
-volume invalidates the hash table and OEM signature stored at offset `0x1000`.
+`images/imagefv.img` has been patched with the custom `logo_m_unlock` supplied
+in [issue #19](https://github.com/promikailamin/hyperos_haptic_ports/issues/19),
+using [`tools/imagefv_tool.py`](tools/imagefv_tool.py). The tool rebuilt every
+UEFI layer and refreshed the Qualcomm hash table, so the patched file is
+structurally consistent (SHA-256
+`189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718`). All other
+embedded graphics are unchanged.
 
-Use [`tools/imagefv_tool.py`](tools/imagefv_tool.py) to unpack, edit, repack and
-validate the image. The tool rebuilds every UEFI layer and refreshes the
-Qualcomm hash table, but it cannot re-create Xiaomi's private-key signature.
-An edited image is therefore only usable on a bootloader that does not enforce
-the `imagefv` signature. Keep the stock image available for recovery. See
+The patched image is **not OEM-signed**: `imagefv` is a Qualcomm signed ELF and
+the private key needed to re-sign it is not available. A locked bootloader will
+normally reject an edited `imagefv`. The original stock, OEM-signed image is
+kept as `images/imagefv_stock.img` (SHA-256
+`3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`) for
+recovery. See
 [`splash/README.md`](splash/README.md#repacking-and-signature-warning) for
 details.
 
