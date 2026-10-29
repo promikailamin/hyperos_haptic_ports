@@ -2,10 +2,10 @@
 Source: https://sourceforge.net/projects/xiaomi-eu-multilang-miui-roms/files/xiaomi.eu/HyperOS-STABLE-RELEASES/HyperOS1.0/xiaomi.eu_VEUX_OS1.0.10.0.TKCCNXM_13.zip
 ZIP MD5: d151950ba961ab2999a9146b723f732c
 #
-# Note: imagefv.img and imagefv_stock.img are the same stock, OEM-signed image.
-# Edited imagefv images cannot be re-signed without Xiaomi's private key and are
-# rejected by the bootloader, so the custom-logo build is no longer distributed.
-# See MANIFEST.md and splash/README.md.
+# Note: imagefv_stock.img is the stock, OEM-signed recovery image.
+# imagefv.img is the issue #21 logo with the OEM signature preserved (hash table
+# left untouched); imagefv_rehashed.img has a rebuilt hash table but no valid
+# OEM signature. See MANIFEST.md and splash/README.md.
 
 3d9f2052062bc04a40b1b61a62b673829ca9dc9e72597062f6b591b96210ebea  abl.img
 93a4a9e03fd567dfe0fe4525de4b5f8e9c1204be13fe3036d30472a3f9a000b8  bluetooth.img
@@ -17,7 +17,8 @@ e84c62afd44bfa355f99607fc522e075214db935c43c2aeb0b65ff199f89686b  core_nhlos.img
 ec118c26a16827f41e96379edde6dd425be3e11ed2ffd6ed1901f964e94edd29  dtbo.img
 09a1b267445aea53148c7c4da0b4fd0795eba5d2409b908d8211ddec7d46f7ce  featenabler.img
 9400dd10ade59576f6b907b1f24f738bb69ba6db88fda7b6b1b7f0bc071430b7  hyp.img
-3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed  imagefv.img
+ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65  imagefv.img
+189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718  imagefv_rehashed.img
 3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed  imagefv_stock.img
 5d6db8435522ed185a73b601400519963bff808dc3bf74cd88f6dc9723b82656  keymaster.img
 c2ccabfece9f8619d6529d1e5bec2916a79f0ab786579260fa7e484bc11a2c33  modem.img

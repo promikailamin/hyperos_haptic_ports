@@ -746,9 +746,15 @@ class SplashImage:
                 )
             from io import BytesIO
 
-            image = Image.open(BytesIO(src)).convert("RGB")
+            image = Image.open(BytesIO(src)).convert("RGBA")
+            # The firmware only stores 24-bit BMPs. Flatten transparency onto
+            # black explicitly instead of discarding the alpha channel, which
+            # would expose whatever colour happens to be stored under fully
+            # transparent pixels (often white).
+            background = Image.new("RGBA", image.size, (0, 0, 0, 255))
+            background.alpha_composite(image)
             out = BytesIO()
-            image.save(out, "BMP")
+            background.convert("RGB").save(out, "BMP")
             src = out.getvalue()
         if src[:2] != b"BM":
             raise ImagefvError(f"{path} is not a BMP or PNG image")
@@ -960,10 +966,16 @@ def cmd_repack(args: argparse.Namespace) -> int:
     print(
         "hash table: refreshed"
         if not args.keep_hash_table
-        else "hash table: kept (will not match edited data)"
+        else "hash table: kept (does NOT match the edited segments; experimental)"
     )
     if new_valid:
-        print("OEM signature: OK")
+        print("OEM signature: OK (preserved by leaving the hash table untouched)")
+        if args.keep_hash_table:
+            print(
+                "WARNING: the segment hashes are stale. This build only works on a "
+                "bootloader that verifies the OEM signature but not the segment "
+                "hashes; keep the stock image for recovery."
+            )
     else:
         print(
             "WARNING: the OEM signature is invalid. Edited imagefv images are "
@@ -1033,8 +1045,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     repack.add_argument(
         "--keep-hash-table",
+        "--preserve-oem-signature",
+        dest="keep_hash_table",
         action="store_true",
-        help="do not refresh the Qualcomm hash table (only useful for inspection)",
+        help=(
+            "edit the payload but leave the Qualcomm hash table/OEM signature "
+            "untouched (experimental: signature stays valid, segment hashes do not)"
+        ),
     )
     repack.add_argument(
         "--allow-unsigned",

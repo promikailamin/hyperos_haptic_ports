@@ -13,18 +13,25 @@ the official fastboot ROM and `imagefv.img` in this repository).
 
 - ROM: `veux_global_images_OS1.0.12.0.TKCMIXM_20241205.0000.00_13.0_global_cda1240a45.tgz`
 - Source image: `images/imagefv.elf` from that ROM
-- Stock image: [`../images/imagefv.img`](../images/imagefv.img), OEM-signed
-  (SHA-256 `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`)
-- Stock recovery copy: [`../images/imagefv_stock.img`](../images/imagefv_stock.img),
-  byte-identical to `imagefv.img`
+- Stock image: [`../images/imagefv_stock.img`](../images/imagefv_stock.img),
+  OEM-signed (SHA-256
+  `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`)
+- Custom issue #21 builds:
+  [`../images/imagefv.img`](../images/imagefv.img) (OEM signature preserved,
+  hash table stale) and
+  [`../images/imagefv_rehashed.img`](../images/imagefv_rehashed.img) (hash table
+  rebuilt, OEM signature invalid)
 
-The checked-in `imagefv.img` is the stock image. The custom-logo build from
-[issue #19](https://github.com/promikailamin/hyperos_haptic_ports/issues/19)
-has been withdrawn: it rebuilt all UEFI layers and refreshed the Qualcomm hash
-table, but it could not recreate Xiaomi's OEM signature. A bootloader that
-verifies `imagefv` rejects it, and flashing it can leave the device unable to
-boot. The custom `logo_m_unlock.png` is still available as an asset for anyone
-who can re-sign the image.
+The supplied `logo_m_unlock.png` (issue #21) is the same flattened 300×2400
+image that was used for issue #19, so the black screen reported after the earlier
+patch was not caused by the PNG/BMP conversion. The custom logo is embedded in
+both issue #21 builds; all other graphics are byte-identical to stock.
+
+`imagefv` is authenticated, so neither custom build is guaranteed to render. A
+bootloader that verifies both the OEM signature and the segment hashes will
+reject both. `images/imagefv.img` keeps the original OEM signature (by not
+touching the hash table) and is the first build to try; the rehashed build is for
+bootloaders that skip `imagefv` verification. Keep the stock image for recovery.
 
 ## How the extraction was done
 
@@ -50,16 +57,22 @@ tool that understands all of the nested layers:
 
 ```bash
 # show the ELF, UEFI firmware volumes, images and hash-table status
-python3 tools/imagefv_tool.py info images/imagefv.img
+python3 tools/imagefv_tool.py info images/imagefv_stock.img
 
 # extract the 17 BMPs
-python3 tools/imagefv_tool.py extract images/imagefv.img -o extracted
+python3 tools/imagefv_tool.py extract images/imagefv_stock.img -o extracted
 
-# replace one image and rebuild every layer (only for inspection/unlocked devices)
-python3 tools/imagefv_tool.py repack images/imagefv.img \
+# replace one image and rebuild every layer + hash table (unsigned)
+python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
     -o imagefv_custom.img \
     --replace logo_m_unlock=extracted/logo_m_unlock.bmp \
     --allow-unsigned
+
+# experimental: keep the OEM signature but leave the segment hashes stale
+python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
+    -o imagefv_signature.img \
+    --replace logo_m_unlock=extracted/logo_m_unlock.bmp \
+    --preserve-oem-signature
 
 # validate UEFI checksums, the hash table and the OEM signature
 python3 tools/imagefv_tool.py verify imagefv_custom.img
@@ -67,53 +80,62 @@ python3 tools/imagefv_tool.py verify imagefv_custom.img
 
 Replacement images must have exactly the same dimensions and be 24-bit,
 uncompressed BMP (PNG input is converted automatically when Pillow is
-installed). The tool refuses replacements that would not fit the original slot.
-`repack` also refuses to write an edited signed image unless `--allow-unsigned`
-is given, because the result is rejected by the bootloader.
+installed; transparent pixels are flattened onto black). The tool refuses
+replacements that would not fit the original slot. `repack` also refuses to write
+a rehashed signed image unless `--allow-unsigned` is given, because the result no
+longer has a valid OEM signature.
 
 ## Custom `logo_m_unlock` replacement
 
-The 300×2400 logo supplied in issue #19 was flattened onto black for the
+The 300×2400 logo supplied in issues #19/#21 was flattened onto black for the
 firmware's 24-bit BMP (the PNG has an alpha channel, the firmware does not).
-The repack command was:
+The issue #21 builds were made with:
 
 ```bash
+# OEM signature preserved; segment hashes intentionally left stale
 python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
-    -o imagefv_custom.img \
+    -o images/imagefv.img \
+    --replace logo_m_unlock=splash/logo_m_unlock.png \
+    --preserve-oem-signature
+
+# fully rebuilt hash table; OEM signature invalid
+python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
+    -o images/imagefv_rehashed.img \
     --replace logo_m_unlock=splash/logo_m_unlock.png \
     --allow-unsigned
-python3 tools/imagefv_tool.py verify imagefv_custom.img   # fails: OEM signature invalid
 ```
 
 - Replacement logo: [`logo_m_unlock.png`](logo_m_unlock.png) (300×2400)
 - Embedded BMP: `logo_m_unlock.bmp` (300×2400, 24-bit)
-- The resulting custom image was **not** released or kept as `imagefv.img`
-  because it cannot pass the bootloader's signature check.
+- `images/imagefv.img` SHA-256:
+  `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65`
+- `images/imagefv_rehashed.img` SHA-256:
+  `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718`
+- `images/imagefv_stock.img` remains the stock OEM-signed recovery image.
 
 ## Repacking and signature warning
 
 `imagefv` is not a plain UEFI container: it is a **Qualcomm signed ELF**. The
-segment at file offset `0x1000` is an MBN version 6 hash segment containing
+segment at file offset `0x1000` is an MBN version 6 hash segment containing:
 
 - SHA-384 hashes of the ELF header/program headers and of the firmware-volume
   segment,
 - an OEM certificate chain and an RSA signature over the hash table and
   metadata.
 
-The old issue #17 repack changed the firmware volume but left that hash table
-untouched, so the image did not even match its own hashes. `tools/imagefv_tool.py`
-now rebuilds the LZMA section, GUIDed section, FFS file, firmware volume and the
-Qualcomm SHA-384 hash table correctly, and it verifies the embedded OEM
-signature. However, the OEM RSA-PSS signature is made with Xiaomi's private key,
-which is not available here. Refreshing the hash table changes the signed data,
-so a repacked image is no longer OEM-signed and a bootloader that verifies
-`imagefv` rejects it (this is why the issue #19 image did not work). There is no
-software-only way around that without re-signing with the OEM key or using a
-bootloader that skips `imagefv` verification.
+`tools/imagefv_tool.py` rebuilds the LZMA section, GUIDed section, FFS file,
+firmware volume and the Qualcomm SHA-384 hash table correctly, and verifies the
+embedded OEM signature. However, the OEM RSA-PSS signature is made with Xiaomi's
+private key, which is not available here. Refreshing the hash table changes the
+signed data, so a rehashed image is no longer OEM-signed. Keeping the hash table
+untouched preserves the signature but leaves the segment hashes stale. Either
+way, a bootloader that verifies both will not render the custom graphics. There
+is no software-only way around that without re-signing with the OEM key or using
+a bootloader that skips `imagefv` verification.
 
 If you need to recover a device after flashing a bad `imagefv`, flash the stock
-`images/imagefv_stock.img` (or `images/imagefv.img`) from this repository/release,
-or use EDL/Qualcomm recovery if the bootloader no longer starts.
+`images/imagefv_stock.img` from this repository/release, or use EDL/Qualcomm
+recovery if the bootloader no longer starts.
 
 ## Assets
 
@@ -153,6 +175,8 @@ Checksums for all PNGs are in [`SHA256SUMS.txt`](SHA256SUMS.txt).
 ## Reflashing note
 
 `imagefv` is verified by the bootloader (it contains an OEM-signed Qualcomm hash
-segment), so modifying or reflashing it can hard-brick the device. The checked-in
-`images/imagefv.img` and `images/imagefv_stock.img` are both the stock,
-OEM-signed image. Do not flash an edited image unless you can re-sign it.
+segment), so modifying or reflashing it can hard-brick the device. Keep
+`images/imagefv_stock.img` (stock, OEM-signed) available for recovery. The issue
+#21 builds in `images/imagefv.img` and `images/imagefv_rehashed.img` are custom
+and experimental; flash them only if you can recover with the stock image or
+EDL.

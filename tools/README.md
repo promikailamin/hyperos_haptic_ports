@@ -19,12 +19,18 @@ python3 tools/imagefv_tool.py info images/imagefv.img
 # Extract the embedded BMPs (add --png to convert with Pillow)
 python3 tools/imagefv_tool.py extract images/imagefv.img -o extracted
 
-# Replace one or more images, then rebuild all layers + the hash table.
+# Replace one or more images and rebuild the hash table.
 # --allow-unsigned is required because the OEM signature cannot be recreated.
-python3 tools/imagefv_tool.py repack images/imagefv.img \
+python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
     -o imagefv_custom.img \
     --replace logo_m_unlock=extracted/logo_m_unlock.bmp \
     --allow-unsigned
+
+# Experimental: edit the payload but leave the OEM signature/hash table alone
+python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
+    -o imagefv_signature.img \
+    --replace logo_m_unlock=extracted/logo_m_unlock.bmp \
+    --preserve-oem-signature
 
 # Check UEFI checksums, the Qualcomm hash table and the OEM signature
 python3 tools/imagefv_tool.py verify imagefv_custom.img
@@ -34,18 +40,21 @@ python3 tools/imagefv_tool.py verify imagefv_custom.img
 `logo_mi.bmp`, `logo_fastboot.bmp`, `logo_m_unlock.bmp` or
 `battery_symbol_Soc10.bmp`. A replacement must keep the original dimensions and
 must be an uncompressed 24-bit BMP; PNG files are converted automatically when
-Pillow is installed. The tool keeps the original BMP header and only replaces
-the pixel data.
+Pillow is installed. Transparent pixels are flattened onto black. The tool keeps
+the original BMP header and only replaces the pixel data.
 
-`--keep-hash-table` is available for inspection only. It leaves the Qualcomm
-hash table untouched, so the image will not match its own segment hashes.
+`--preserve-oem-signature` (alias `--keep-hash-table`) edits the payload but
+leaves the Qualcomm hash table untouched. The OEM signature therefore remains
+valid, but the segment hashes no longer match. This is experimental and only
+works on a bootloader that verifies the signature without rechecking the segment
+hashes.
 
-`repack` refuses to write an edited image of a correctly signed input unless
+`repack` refuses to write a rehashed image of a correctly signed input unless
 `--allow-unsigned` is supplied. The OEM RSA-PSS signature covers the hash table
 and cannot be regenerated without Xiaomi's private key, so the output will be
-rejected by a bootloader that verifies `imagefv`. `verify` now checks that
-signature against the certificate embedded in the image and exits non-zero when
-it has been invalidated.
+rejected by a bootloader that verifies `imagefv`. `verify` checks that signature
+against the certificate embedded in the image and exits non-zero when it has
+been invalidated.
 
 ## What gets rebuilt
 
@@ -68,15 +77,20 @@ The Qualcomm hash segment also contains an OEM RSA-PSS signature over the hash
 table and metadata. The private key is not available, so the tool cannot re-sign
 an edited image. It refreshes the hash table (so the structure is
 self-consistent), but the OEM signature becomes invalid. Bootloaders that verify
-`imagefv` will reject the result. This is why an edited `imagefv` cannot be made
-to boot by software alone.
+both the signature and the segment hashes will reject the result. This is why an
+edited `imagefv` cannot be made to show custom graphics by software alone on
+such a bootloader.
 
-Both checked-in files, `images/imagefv.img` and `images/imagefv_stock.img`, are
-the stock OEM-signed image with SHA-256
-`3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed`. The
-withdrawn custom-logo build had SHA-256
-`189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718` and is no
-longer distributed.
+Checked-in imagefv files:
+
+| File | SHA-256 | State |
+| --- | --- | --- |
+| `images/imagefv_stock.img` | `3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed` | Stock OEM-signed recovery image. |
+| `images/imagefv.img` | `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65` | Issue #21 logo; OEM signature preserved, hash table stale (experimental). |
+| `images/imagefv_rehashed.img` | `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718` | Issue #21 logo; hash table rebuilt, OEM signature invalid. |
+
+Both custom builds change only `logo_m_unlock.bmp`; all other embedded graphics
+are byte-identical to stock.
 
 ## Tests
 
