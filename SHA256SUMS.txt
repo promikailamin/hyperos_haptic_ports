@@ -6,7 +6,9 @@ ZIP MD5: d151950ba961ab2999a9146b723f732c
 # imagefv.img and imagefv_r_unlock.img patch the Mi/Redmi unlock logo with the
 # OEM signature preserved (hash table left untouched); the *_rehashed variants
 # have a rebuilt hash table but no valid OEM signature. imagefv_mr_unlock.img
-# patches both slots. See MANIFEST.md and splash/README.md.
+# patches both slots. imagefv_all_logo.img (issue #25) fits the custom artwork
+# to every logo_*.bmp slot (brand, fastboot, unlock and destroyed-screen). See
+# MANIFEST.md and splash/README.md.
 
 3d9f2052062bc04a40b1b61a62b673829ca9dc9e72597062f6b591b96210ebea  abl.img
 93a4a9e03fd567dfe0fe4525de4b5f8e9c1204be13fe3036d30472a3f9a000b8  bluetooth.img
@@ -21,6 +23,8 @@ ec118c26a16827f41e96379edde6dd425be3e11ed2ffd6ed1901f964e94edd29  dtbo.img
 ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65  imagefv.img
 189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718  imagefv_rehashed.img
 3c5e740cb576db7c1dbc20bd391f0622055e398740b008bcb31569e25af77fed  imagefv_stock.img
+a4369a99093596d84f8679cc46be4af759609e369b65449fdc149e513c614ece  imagefv_all_logo.img
+3e8875c8e5e560c31f226bed00852b55bc1bdf15083f7daf34ecfe15df4d0bd2  imagefv_all_logo_rehashed.img
 c36ce21e1232bb5b17249d8ed72e56acf8f298fc728c83a069f82127b37bc892  imagefv_mr_unlock.img
 422d0620b1a4e0818d6a1b0bd111a7975b731203853909147292afd3e8f9d976  imagefv_mr_unlock_rehashed.img
 1debe8cf2c1c281f43649c2288b560142e82a02a965574bb7f3e68a8dee07086  imagefv_r_unlock.img

@@ -29,6 +29,7 @@ import lzma
 import shutil
 import struct
 import sys
+from math import ceil
 from pathlib import Path
 
 try:
@@ -987,6 +988,16 @@ class SplashImage:
     def image_names(self) -> list[str]:
         return [file.name for file in self.inner.files if file.name]
 
+    def logo_names(self) -> list[str]:
+        """Return every splash/logo BMP resource (excluding battery/thermal icons)."""
+        return [
+            file.name
+            for file in self.inner.files
+            if file.name
+            and file.name.lower().startswith("logo")
+            and file.name.lower().endswith(".bmp")
+        ]
+
     def extract(self, output_dir: Path, png: bool = False) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         manifest = []
@@ -1023,7 +1034,51 @@ class SplashImage:
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
 
-    def _normalise_replacement(self, name: str, path: Path) -> bytes:
+    def _fit_image(
+        self, name: str, src: bytes, original_info: dict, label: str
+    ) -> bytes:
+        """Scale/crop an arbitrary image to the exact dimensions of a resource."""
+        if not HAVE_PIL:
+            raise ImagefvError(
+                "fitting logo resources requires Pillow (pip install pillow), "
+                "or supply PNG/BMP files with the exact target dimensions"
+            )
+        from io import BytesIO
+
+        try:
+            image = Image.open(BytesIO(src)).convert("RGBA")
+        except Exception as exc:
+            raise ImagefvError(
+                f"{label}: cannot open replacement image: {exc}"
+            ) from exc
+        # Flatten transparency onto black explicitly instead of discarding the
+        # alpha channel, which would expose whatever colour is stored under
+        # fully transparent pixels (often white).
+        background = Image.new("RGBA", image.size, (0, 0, 0, 255))
+        background.alpha_composite(image)
+        image = background.convert("RGB")
+        target_width = original_info["width"]
+        target_height = original_info["height"]
+        # Cover the target (scale by the larger ratio) then centre-crop. This
+        # keeps the artwork full-width instead of adding black bars for the
+        # narrower unlock/branding slots.
+        scale = max(target_width / image.width, target_height / image.height)
+        new_size = (
+            max(1, ceil(image.width * scale)),
+            max(1, ceil(image.height * scale)),
+        )
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        image = image.resize(new_size, resample)
+        left = (new_size[0] - target_width) // 2
+        top = (new_size[1] - target_height) // 2
+        image = image.crop((left, top, left + target_width, top + target_height))
+        out = BytesIO()
+        image.save(out, "BMP")
+        return out.getvalue()
+
+    def _normalise_source(
+        self, name: str, src: bytes, label: str, fit: bool = False
+    ) -> bytes:
         target = next((f for f in self.inner.files if f.name == name), None)
         if target is None:
             raise ImagefvError(f"unknown image name: {name}")
@@ -1034,8 +1089,9 @@ class SplashImage:
             raise ImagefvError(f"{name} has no raw image section")
         original = section.data
         original_info = bmp_info(original, name)
-        src = path.read_bytes()
-        if src[:8] == b"\x89PNG\r\n\x1a\n":
+        if fit:
+            src = self._fit_image(name, src, original_info, label)
+        elif src[:8] == b"\x89PNG\r\n\x1a\n":
             if not HAVE_PIL:
                 raise ImagefvError(
                     "PNG input requires Pillow (pip install pillow), or supply a BMP"
@@ -1051,7 +1107,7 @@ class SplashImage:
             out = BytesIO()
             background.convert("RGB").save(out, "BMP")
             src = out.getvalue()
-        src_info = bmp_info(src, str(path))
+        src_info = bmp_info(src, label)
         comparable = ("width", "height", "planes", "bit_count", "compression")
         if any(original_info[key] != src_info[key] for key in comparable):
             raise ImagefvError(
@@ -1074,6 +1130,9 @@ class SplashImage:
             + pixels
             + original[dst_start + original_info["pixel_size"] :]
         )
+
+    def _normalise_replacement(self, name: str, path: Path) -> bytes:
+        return self._normalise_source(name, path.read_bytes(), str(path))
 
     def reconstruct_stream(self, new_inner: bytes) -> bytes:
         """Rebuild the decompressed stream, preserving everything outside the FV."""
@@ -1102,10 +1161,23 @@ class SplashImage:
             + compressed[LZMA_HEADER_SIZE:]
         )
 
-    def repack(self, replacements: dict[str, Path], update_hashes: bool = True) -> bytes:
+    def repack(
+        self,
+        replacements: dict[str, Path | bytes],
+        update_hashes: bool = True,
+        fit: bool = False,
+    ) -> bytes:
         normalised = {
-            name: self._normalise_replacement(name, path)
-            for name, path in replacements.items()
+            name: (
+                self._normalise_source(
+                    name, bytes(source), f"{name} (in-memory)", fit
+                )
+                if isinstance(source, (bytes, bytearray))
+                else self._normalise_source(
+                    name, source.read_bytes(), str(source), fit
+                )
+            )
+            for name, source in replacements.items()
         }
         replacement_by_file = {}
         for file in self.inner.files:
@@ -1344,6 +1416,15 @@ def cmd_repack(args: argparse.Namespace) -> int:
         if not name.lower().endswith(".bmp"):
             name += ".bmp"
         replacements[name] = Path(path)
+    if args.replace_logo:
+        source_path = Path(args.replace_logo)
+        source = source_path.read_bytes()
+        for name in image.logo_names():
+            if name in replacements:
+                continue
+            replacements[name] = image._normalise_source(
+                name, source, str(source_path), fit=True
+            )
     if not replacements:
         _write_new_output(input_path, output_path, image.data)
         print("no replacements requested; copied input unchanged")
@@ -1465,6 +1546,14 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         metavar="NAME=PATH",
         help="replace image NAME (for example logo_m_unlock=logo.png)",
+    )
+    repack.add_argument(
+        "--replace-logo",
+        metavar="PATH",
+        help=(
+            "fit one logo image to every logo_*.bmp splash resource (brand, "
+            "fastboot, unlock and destroyed-screen slots)"
+        ),
     )
     repack.add_argument(
         "--keep-hash-table",

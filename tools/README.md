@@ -32,13 +32,23 @@ python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
     --replace logo_m_unlock=extracted/logo_m_unlock.bmp \
     --preserve-oem-signature
 
+# Replace every logo_*.bmp splash slot with one image (it is scaled/cropped to
+# each slot's original dimensions; battery/thermal symbols are not touched).
+python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
+    -o imagefv_all_logo.img \
+    --replace-logo splash/logo_m_unlock.png \
+    --preserve-oem-signature
+
 # Check UEFI checksums, the Qualcomm hash table and the OEM signature
 python3 tools/imagefv_tool.py verify imagefv_custom.img
 ```
 
 `--replace` can be repeated. Names are the extracted BMP names, for example
 `logo_mi.bmp`, `logo_fastboot.bmp`, `logo_m_unlock.bmp` or
-`battery_symbol_Soc10.bmp`. A replacement must keep the original dimensions,
+`battery_symbol_Soc10.bmp`. `--replace-logo PATH` is a shortcut that fits one
+PNG/BMP to every `logo_*.bmp` resource (brand, fastboot, unlock and
+destroyed-screen slots) using a centre-crop, so the displayed slot no longer has
+to be guessed. A replacement must keep the original dimensions,
 bit depth and compression mode; stock resources include 4-bit and 24-bit
 uncompressed BMPs. PNG files are converted to 24-bit BMP automatically when
 Pillow is installed (they can therefore only replace 24-bit resources).
@@ -124,11 +134,15 @@ Checked-in imagefv files:
 | `images/imagefv_r_unlock_rehashed.img` | `e76fb0d0202b00c34bde1a7a10e7e3bcdd1c7fa2ec84555510b8758ddbb299a9` | Issue #23 Redmi logo; hash table rebuilt, OEM signature invalid. |
 | `images/imagefv.img` | `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65` | Issue #21 Mi logo; OEM signature preserved, hash table stale (experimental). |
 | `images/imagefv_rehashed.img` | `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718` | Issue #21 Mi logo; hash table rebuilt, OEM signature invalid. |
+| `images/imagefv_all_logo.img` | `a4369a99093596d84f8679cc46be4af759609e369b65449fdc149e513c614ece` | Issue #25 all-logo build; OEM signature preserved, hash table stale (experimental). |
+| `images/imagefv_all_logo_rehashed.img` | `3e8875c8e5e560c31f226bed00852b55bc1bdf15083f7daf34ecfe15df4d0bd2` | Issue #25 all-logo build; hash table rebuilt, OEM signature invalid. |
 
 The issue #23 builds change `logo_r_unlock.bmp` (Redmi slot) and, for the
 `mr` builds, also `logo_m_unlock.bmp` (Mi slot); all other embedded graphics are
 byte-identical to stock. A Redmi-branded veux device renders `logo_r_unlock`, so
-the earlier Mi-only builds could not change its unlock warning.
+the earlier Mi-only builds could not change its unlock warning. The issue #25
+`*_all_logo` builds instead change every `logo_*.bmp` resource, so they also
+cover the normal brand splash, fastboot screen and destroyed-system warning.
 
 ## Tests
 
@@ -136,8 +150,8 @@ the earlier Mi-only builds could not change its unlock warning.
 python3 -m unittest discover -s tests -v
 ```
 
-The suite covers the stock image, both checked-in custom builds, a full
-extract-all/BMP-replace/no-change round trip (byte-for-byte), identical-pixel
-replacement, trailing LZMA-stream preservation, modified-BMP dimension/format
-checks, LZMA header length, hash/OEM-signature separation, and output-safety
-refusals.
+The suite covers the stock image, the checked-in custom builds (including the
+issue #25 all-logo builds), a full extract-all/BMP-replace/no-change round trip
+(byte-for-byte), identical-pixel replacement, `--replace-logo` fitting, trailing
+LZMA-stream preservation, modified-BMP dimension/format checks, LZMA header
+length, hash/OEM-signature separation, and output-safety refusals.

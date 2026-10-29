@@ -26,6 +26,11 @@ the official fastboot ROM and `imagefv.img` in this repository).
   [`../images/imagefv_r_unlock.img`](../images/imagefv_r_unlock.img) (OEM
   signature preserved, hash table stale), plus their
   `_rehashed` variants (hash table rebuilt, OEM signature invalid)
+- Custom issue #25 all-logo builds:
+  [`../images/imagefv_all_logo.img`](../images/imagefv_all_logo.img) (OEM
+  signature preserved, hash table stale) and
+  [`../images/imagefv_all_logo_rehashed.img`](../images/imagefv_all_logo_rehashed.img)
+  (hash table rebuilt, OEM signature invalid)
 
 The supplied `logo_m_unlock.png` (issue #21) is the same flattened 300×2400
 image that was used for issue #19, so the black screen reported after the earlier
@@ -34,12 +39,15 @@ which is the **Mi** slot. A Redmi-branded veux device displays `logo_r_unlock`
 (300×2250), so issues #19/#21 patched the wrong resource. Issue #23 adds
 [`logo_r_unlock_custom.png`](logo_r_unlock_custom.png), the same logo
 centre-cropped to 300×2250, and builds that patch the Redmi slot or both slots.
+Issue #25 instead fits the artwork to **every** `logo_*.bmp` slot (brand,
+fastboot, all unlock variants and the destroyed-system warning), so the build no
+longer depends on guessing which slot the firmware renders.
 
 `imagefv` is authenticated, so no custom build is guaranteed to render. A
 bootloader that verifies both the OEM signature and the segment hashes will
-reject all of them. For a Redmi device, try
-`images/imagefv_mr_unlock.img` first (OEM signature preserved); use
-`images/imagefv_mr_unlock_rehashed.img` only if the bootloader skips `imagefv`
+reject all of them. If the displayed slot is unknown, try
+`images/imagefv_all_logo.img` first (OEM signature preserved); use
+`images/imagefv_all_logo_rehashed.img` only if the bootloader skips `imagefv`
 verification. Keep the stock image for recovery.
 
 ## How the extraction was done
@@ -148,6 +156,22 @@ python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
     --allow-unsigned
 ```
 
+Issue #25 all-logo builds:
+
+```bash
+# every logo slot, OEM signature preserved
+python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
+    -o images/imagefv_all_logo.img \
+    --replace-logo splash/logo_m_unlock.png \
+    --preserve-oem-signature
+
+# every logo slot, rebuilt hash table
+python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
+    -o images/imagefv_all_logo_rehashed.img \
+    --replace-logo splash/logo_m_unlock.png \
+    --allow-unsigned
+```
+
 - Mi replacement logo: [`logo_m_unlock.png`](logo_m_unlock.png) (300×2400)
 - Redmi replacement logo: [`logo_r_unlock_custom.png`](logo_r_unlock_custom.png)
   (300×2250)
@@ -165,6 +189,10 @@ python3 tools/imagefv_tool.py repack images/imagefv_stock.img \
   `ba58536ad4629575f1c68c2f26e9f328e9d0f70fa48aabd33d07a27558187a65`
 - `images/imagefv_rehashed.img` SHA-256:
   `189e8c7abc6e6411e792312266b3e461fb7895bec232d0c49ab845d19495a718`
+- `images/imagefv_all_logo.img` SHA-256:
+  `a4369a99093596d84f8679cc46be4af759609e369b65449fdc149e513c614ece`
+- `images/imagefv_all_logo_rehashed.img` SHA-256:
+  `3e8875c8e5e560c31f226bed00852b55bc1bdf15083f7daf34ecfe15df4d0bd2`
 - `images/imagefv_stock.img` remains the stock OEM-signed recovery image.
 
 ## Repacking and signature warning
@@ -232,9 +260,11 @@ Checksums for all PNGs are in [`SHA256SUMS.txt`](SHA256SUMS.txt).
 `imagefv` is verified by the bootloader (it contains an OEM-signed Qualcomm hash
 segment), so modifying or reflashing it can hard-brick the device. Keep
 `images/imagefv_stock.img` (stock, OEM-signed) available for recovery. The issue
-#21 and #23 builds are custom and experimental; flash them only if you can
-recover with the stock image or EDL. On a Redmi device the relevant resource is
-`logo_r_unlock`, so start with `images/imagefv_mr_unlock.img` (or
-`images/imagefv_r_unlock.img`). If those still produce a black splash, flash
-`images/imagefv_stock.img` and provide the exact stock `imagefv` from the
-installed ROM, because a firmware-version mismatch can also break rendering.
+#21, #23 and #25 builds are custom and experimental; flash them only if you can
+recover with the stock image or EDL. On a Redmi device the unlock resource is
+`logo_r_unlock`, but if the exact displayed slot is unknown start with
+`images/imagefv_all_logo.img`, which patches every logo slot (or
+`images/imagefv_mr_unlock.img` for the unlock screen only). If those still
+produce a black splash, flash `images/imagefv_stock.img` and provide the exact
+stock `imagefv` from the installed ROM, because a firmware-version mismatch can
+also break rendering.

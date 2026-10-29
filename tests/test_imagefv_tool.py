@@ -47,6 +47,16 @@ class ImagefvToolTests(unittest.TestCase):
         cls.combined_rehashed_image = imagefv_tool.SplashImage(
             cls.combined_rehashed_data
         )
+        cls.all_logo_path = ROOT / "images" / "imagefv_all_logo.img"
+        cls.all_logo_data = cls.all_logo_path.read_bytes()
+        cls.all_logo_image = imagefv_tool.SplashImage(cls.all_logo_data)
+        cls.all_logo_rehashed_path = (
+            ROOT / "images" / "imagefv_all_logo_rehashed.img"
+        )
+        cls.all_logo_rehashed_data = cls.all_logo_rehashed_path.read_bytes()
+        cls.all_logo_rehashed_image = imagefv_tool.SplashImage(
+            cls.all_logo_rehashed_data
+        )
 
     def _modified_logo(self, tmp: Path) -> Path:
         logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")
@@ -152,6 +162,71 @@ class ImagefvToolTests(unittest.TestCase):
                 if name in ("logo_m_unlock.bmp", "logo_r_unlock.bmp"):
                     continue
                 self.assertEqual(custom[name], stock[name], name)
+
+    def test_all_logo_builds_change_every_logo_resource(self):
+        stock = self._raw_images(self.image)
+        logo_names = set(self.image.logo_names())
+        self.assertEqual(len(logo_names), 8)
+        self.assertIn("logo_fastboot.bmp", logo_names)
+        self.assertIn("logo_destory.bmp", logo_names)
+        for custom_image in (self.all_logo_image, self.all_logo_rehashed_image):
+            custom = self._raw_images(custom_image)
+            self.assertEqual(set(custom), set(stock))
+            for name in stock:
+                if name in logo_names:
+                    self.assertNotEqual(custom[name], stock[name], name)
+                    self.assertEqual(
+                        imagefv_tool.bmp_info(custom[name], name)["width"],
+                        imagefv_tool.bmp_info(stock[name], name)["width"],
+                    )
+                else:
+                    self.assertEqual(custom[name], stock[name], name)
+
+    def test_all_logo_builds_have_expected_authentication_states(self):
+        self.assertFalse(self.all_logo_image.hash.matches(self.all_logo_data))
+        self.assertTrue(self.all_logo_image.hash.oem_signature_valid())
+        self.assertEqual(
+            self.all_logo_image.validation_failures(check_signature=False),
+            ["Qualcomm hash table does not match the ELF segments"],
+        )
+        self.assertTrue(
+            self.all_logo_rehashed_image.hash.matches(self.all_logo_rehashed_data)
+        )
+        self.assertFalse(
+            self.all_logo_rehashed_image.hash.oem_signature_valid()
+        )
+        self.assertEqual(
+            self.all_logo_rehashed_image.validation_failures(check_signature=False),
+            [],
+        )
+
+    @unittest.skipUnless(imagefv_tool.HAVE_PIL, "Pillow is required to fit logos")
+    def test_replace_logo_fits_every_slot(self):
+        source = ROOT / "splash" / "logo_m_unlock.png"
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "imagefv.img"
+            args = [
+                "repack",
+                str(self.stock_path),
+                "-o",
+                str(output),
+                "--replace-logo",
+                str(source),
+                "--preserve-oem-signature",
+            ]
+            self.assertEqual(imagefv_tool.main(args), 0)
+            result = imagefv_tool.SplashImage(output.read_bytes())
+        stock = self._raw_images(self.image)
+        fitted = self._raw_images(result)
+        for name in self.image.logo_names():
+            stock_info = imagefv_tool.bmp_info(stock[name], name)
+            fitted_info = imagefv_tool.bmp_info(fitted[name], name)
+            self.assertEqual(fitted_info["width"], stock_info["width"])
+            self.assertEqual(fitted_info["height"], stock_info["height"])
+            self.assertNotEqual(fitted[name], stock[name])
+        for name in stock:
+            if name not in self.image.logo_names():
+                self.assertEqual(fitted[name], stock[name], name)
 
     def test_unchanged_repack_preserves_signed_image(self):
         logo = next(f for f in self.image.inner.files if f.name == "logo_m_unlock.bmp")
